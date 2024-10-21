@@ -62,9 +62,13 @@ class RTN:
         out0 = out1.transpose(*inv_perm).reshape(self.X.shape)
         return out0
 
-    def step(self, latent_perm, ker, inp=None, alpha=0.01) -> np.ndarray:
+    def step(self, latent_perm, ker, inp=None, alpha=0.01, sigma=0) -> np.ndarray:
         """
-        Euler step of dX/dt = X @ ker, where ker is a subtensor of X whos indices are determined by X (and t).
+        Let dXdt = X @ ker, then update: X += alpha * dXdt
+
+        sigma is a 'noise parameter', paremeterizing the stddev of the base
+        noise, which is scaled by prediction error and added to the model.
+
         """
         if inp is not None:
             self.input(inp)
@@ -76,6 +80,13 @@ class RTN:
         dX = self.prod(ker, latent_shape=latent_shape, latent_perm=latent_perm)
         self.X = self.X + alpha * dX
         # self.input(inp)
+
+        if (inp is not None) and (sigma > 0):
+            noise = np.random.normal(scale=sigma, size=self.X.shape)
+            err = np.linalg.norm(inp - self.output(*inp.shape[:2]))
+            noise = noise * err
+            self.X = self.X + noise
+
         self.X = np.clip(self.X, self.clip_min, self.clip_max)
 
         return self.X

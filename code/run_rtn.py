@@ -50,11 +50,6 @@ def sample_prod_params(X, n, k, color=False):
     ker = ker[ker_indices]
     ker = ker.transpose(*ker_latent_perm)
 
-
-    # print(X_latent_perm.shape)
-    # print(ker.shape)
-
-
     return (pre_xlp, pre_ksp, pre_ki, pre_klp), X_latent_perm, ker
 
 
@@ -90,7 +85,7 @@ def main(args):
                         inp = rgb2grey(inp)
 
                 pre, xlp, ker = sample_prod_params(rtn.X, rtn.n, rtn.k, args.color)
-                state = rtn.step(latent_perm=xlp, ker=ker, inp=inp, alpha=args.alpha).copy()
+                state = rtn.step(latent_perm=xlp, ker=ker, inp=inp, alpha=args.alpha, sigma=args.sigma).copy()
                 yield t, state
 
         def draw_func(frame):
@@ -129,11 +124,18 @@ if __name__ == '__main__':
     parser.add_argument('--clip_min', '-cmi', default=-2, type=float)
     parser.add_argument('--clip_max', '-cma', default=2, type=float)
     parser.add_argument('--sample_period', '-sp', default=None, type=int)
+    parser.add_argument('--sigma', default=0, type=float)
 
 
     args = parser.parse_args()
 
-    if args.sample_period is not None: args.video_input = True
-    if args.color: args.video_input = True
+    # validate args
+    if any((args.sample_period, args.color, args.h, args.w)):
+        args.video_input = True
+    if args.video_input:
+        args.sample_period = args.sample_period or 1
+
+    if args.color:
+        assert args.n == 3, 'handling color for n != 3 not supported.'
 
     main(args)
