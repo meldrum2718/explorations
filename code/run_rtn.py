@@ -72,11 +72,7 @@ def main(args):
         rtn = RTN(n, k, color=args.color, clip_min=args.clip_min, clip_max=args.clip_max)
 
         fig = plt.figure(figsize=(14, 7))
-        im_ax = fig.add_subplot(1, 2, 1)
-        pxlp_ax = fig.add_subplot(4, 2, 2)
-        pksp_ax = fig.add_subplot(4, 2, 4)
-        pki_ax = fig.add_subplot(4, 2, 6)
-        pklp_ax = fig.add_subplot(4, 2, 8)
+        im_ax = fig.add_subplot()
 
         im = im_ax.imshow(normalize(rtn.X), cmap='grey')
 
@@ -95,17 +91,11 @@ def main(args):
 
                 pre, xlp, ker = sample_prod_params(rtn.X, rtn.n, rtn.k, args.color)
                 state = rtn.step(latent_perm=xlp, ker=ker, inp=inp, alpha=args.alpha).copy()
-                yield t, (pre, ker, state)
+                yield t, state
 
         def draw_func(frame):
-            t, frame = frame
-            pre, ker, state = frame
-            pre_xlp, pre_ksp, pre_ki, pre_klp = pre
+            t, state = frame
             im.set_data(normalize(state))
-            pxlp_ax.cla(); pxlp_ax.stem(pre_xlp); pxlp_ax.set_title("X latent permutation")
-            pksp_ax.cla(); pksp_ax.stem(pre_ksp); pksp_ax.set_title("Kernel sample permutation")
-            pki_ax.cla(); pki_ax.imshow(pre_ki); pki_ax.set_title("Kernel")
-            pklp_ax.cla(); pklp_ax.stem(pre_klp); pklp_ax.set_title("Kernel latent permutation.")
             fig.suptitle(str(t))
             return im
 
