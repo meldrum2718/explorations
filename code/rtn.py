@@ -7,10 +7,6 @@ def inv_p(perm):
     return inv   
 
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
-
-
 class RTN:
     """ Recurrent tensor network.
         X is an (n^k, n^k) array.
@@ -20,66 +16,41 @@ class RTN:
             (n, n, (n, n, n^(2k-2) ) )
 
         and as an (n**2, n**2)**(k-1).
-
-        Design decisions:
-            how to perform the tensor contraction. reshaping or einsum. expect einsum more efficient, todo test
-            how to do the sampling
-            how to simulate the ode. a simple eulers method, or some ode solver from scipy/torchdiffeq.
-            how to provide fbk. definitely some continuous signal, noise propto 'pred err'
-            how to extract output. explicit or learned proj? cconv stems?
-            how to connect to 'long term memory. almost certainly lonng term memory is  in the weights of an eg llm or some enc.dec.arch.'
-            note updating wei of ltm should be a dyn.sys tht listens to the rtn. although also likely these trns are to be ran in parallel in some sparse, maybe 2 or 3 dim rgg?
-
-        todo represent attn, ffn, cnn as specific instances or stable points of rtn.dyn.sys.
-
-        believe they should have fairly clean / simpe representations.
-        convolution with stride = kernel_size definitely is trivial to represent with the rtn.
-
     """
 
-    def __init__(self, n, k):
-        """ initialize a random n**k x n**k state matrix."""
+    def __init__(self, n, k, color=False, clip_min=-2, clip_max=2):
+        """ initialize a random (n**k, n**k) state matrix."""
         self.n = n
         self.k = k
-        self.X = np.random.randn(n**k, n**k)
-
-    def sample_prod_params(self):
-        """ Use X to get arguments for a product of X with a subtensor of X.
-
-            Just going to do a really simple sampling for now. future, perhaps
-            make it be more built/structured, like with a conv stem or so
-
-            Returns:
-                (X_latent_perm, ker): a permutation to apply to X, and a kernel to multiply X by.
-        """
-        X, n, k = self.X, self.n, self.k
-
-        nested_shape = (n for _ in range(2 * k))
-        
-        X_latent_perm = np.argsort(np.sum(X[0:n, 0:2*k], axis=0))
-
-        ker_ndim = np.argmax(np.sum(X[n:2*n, 0:k-2], axis=0)) + 2
-        ker_sample_perm = np.argsort(np.sum(X[2*n:3*n, 0:2*k], axis=0))
-        ker_indices = tuple(np.argmax(X[3*n:4*n, 0:2*k-ker_ndim], axis=0))
-        ker_latent_perm = np.argsort(np.sum(X[4*n:5*n, 0:ker_ndim], axis=0))
-        
-        ker = X.reshape(*nested_shape).transpose(*ker_sample_perm)[ker_indices].transpose(*ker_latent_perm)
-
-        return X_latent_perm, ker
-
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+        self.color = color
+        if self.color: # add a color dim
+            self.X = np.random.randn(n**k, n**k, n)
+        else:
+            self.X = np.random.randn(n**k, n**k)
 
     def input(self, inp):
-        """ inject inp into self.X. """
+        """ inject inp into bottom right corner of self.X.
+            TODO do this better, this feels crude.
+        """
+        if inp is None:
+            return
         h, w = inp.shape[:2]
         self.X[-h:, -w:] = inp
 
-    def output(self):
+    def output(self, h, w):
         """ project state out to lower dimensional space.
+        for now just done by returning bottom right (h, w) submatrix.
 
         TODO think about introducing conv stems for outpus. would encourage
         interpratible, spatially localized representations I think..
+
+        But for now, we just pull output from some submatrix of the state, and
+        let the rtn implicitly find good representations. if we have a regular
+        sampling period, this should work out nicely.
         """
-        pass
+        return self.X[-h:, -w:]
 
     def prod(self, ker, latent_shape, latent_perm) -> np.ndarray:
         """ reshape x0 into latent_shape, apply permutation, multiply by ker,
@@ -91,16 +62,20 @@ class RTN:
         out0 = out1.transpose(*inv_perm).reshape(self.X.shape)
         return out0
 
-    def step(self, inp=None, alpha=0.01) -> np.ndarray:
+    def step(self, latent_perm, ker, inp=None, alpha=0.01) -> np.ndarray:
         """
-        Euler step of dX/dt = X @ ker, where ker is a subtensor of X whos indices are determined by X.
+        Euler step of dX/dt = X @ ker, where ker is a subtensor of X whos indices are determined by X (and t).
         """
         if inp is not None:
-            print('warning. inp being ignored (for now, not implemented yet)')
+            self.input(inp)
 
-        latent_perm, ker = self.sample_prod_params()
-
-        dX = self.prod(ker, (self.n for _ in range(2*self.k)), latent_perm=latent_perm)
-        self.X = np.clip(self.X + alpha * dX, -2, 2)
+        if self.color:
+            latent_shape = (self.n for _ in range(2*self.k + 1))
+        else:
+            latent_shape = (self.n for _ in range(2*self.k))
+        dX = self.prod(ker, latent_shape=latent_shape, latent_perm=latent_perm)
+        self.X = self.X + alpha * dX
+        # self.input(inp)
+        self.X = np.clip(self.X, self.clip_min, self.clip_max)
 
         return self.X
