@@ -26,7 +26,7 @@ def main(args):
         fig = plt.figure(figsize=(14, 7))
         im_ax = fig.add_subplot()
 
-        im = im_ax.imshow(normalize(rtn.output()), cmap='grey')
+        im = im_ax.imshow(normalize(rtn.output()[0]), cmap='grey')
 
         alpha = 0
         noise_fbk = 0
@@ -45,16 +45,23 @@ def main(args):
                     inp = cv2.resize(inp, (w, h), interpolation = cv2.INTER_AREA) / 255.0
                     if not args.color:
                         inp = rgb2grey(inp)
+                    inp = inp.reshape(rtn.nested_shape[1:]) # everything but first (batch) dim
+                    inp = np.stack([inp] * args.batch_dim, axis=0)
+                    assert np.all(inp.shape == rtn.X.shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
 
-                ker = rtn.X if inp is None else inp
+                if inp is not None:
+                    ker = inp
+                    inp = inp.reshape(rtn.flat_shape)
+                else:
+                    ker = rtn.X
                 state = rtn.step(ker=ker, C=rtn.X.reshape(rtn.flat_shape), inp=inp, alpha=alpha, noise_fbk=noise_fbk)
 
                 yield t, state
 
         def draw_func(frame):
             t, state = frame
+            state = state[0] # for now, just look at first row in batch dim
             im.set_data(normalize(state))
-            # im.axes.figure.canvas.draw_idle()
             fig.suptitle(str(t))
             return [im]
 
@@ -80,8 +87,6 @@ def main(args):
 
         plt.show()
 
-    except Exception as e:
-        print(e)
     finally:
         if cap is not None:
             cap.release()
@@ -103,8 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--alphamax', required=False, default='1', type=float)
     parser.add_argument('--noise_fbk_min', required=False, default='0', type=float)
     parser.add_argument('--noise_fbk_max', required=False, default='0.01', type=float)
-    parser.add_argument('--batch_dim', '-bd', default=0, type=int)
-
+    parser.add_argument('--batch_dim', '-bd', default=1, type=int)
 
 
     args = parser.parse_args()

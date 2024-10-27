@@ -56,20 +56,24 @@ def ceinsum(X, Y, C, color, verbose=False) -> np.ndarray:
     p('ker1.s', ker.shape)
     ker = ker[ki]
     p('ker.s', ker.shape)
-    p()
 
     out = np.einsum(X, px, ker, pk, po)
+
+    p('out.s', out.shape)
+    p()
+
     return out
 
 
 class RTN:
-    def __init__(self, n, k, batch_dim=0, color=False, clip_min=-2, clip_max=2):
+    def __init__(self, n, k, batch_dim=0, color=False, clip_min=-2, clip_max=2, verbose=False):
         """ initialize a random (n**k, n**k) state matrix.
-
-        TODO implement batch dim properly. right now going to implement
-             something not respecting independence along batch time. will
-             rectify soon
         """
+
+        def p(*args):
+            if verbose:
+                print(*args)
+
         self.n = n
         self.k = k
         self.batch_dim = batch_dim
@@ -79,36 +83,44 @@ class RTN:
         self.ndim = 2 * k
 
         self.flat_shape = (n**k, n**k)
+        self.nested_shape = tuple([n for _ in range(2 * k)])
 
-        if batch_dim > 0:
-            self.flat_shape = (batch_dim,) + self.flat_shape
+        self.flat_shape = (batch_dim,) + self.flat_shape
+        self.nested_shape = (batch_dim,) + self.nested_shape
+
         if self.color:
             assert n >= 3, 'need n >=3 for color'
             self.flat_shape = self.flat_shape + (n,)
+            self.nested_shape = self.nested_shape + (n,)
             self.ndim += 1
 
-        self.nested_shape = tuple([n for _ in range(self.ndim)])
+        p('flat shape', self.flat_shape)
+        p('nested shape', self.nested_shape)
+
         self.X: np.ndarray = np.random.randn(*self.flat_shape).reshape(self.nested_shape)
 
     def output(self):
-        """ project state out to lower dimensional space.
-        for now just done by returning bottom right (h, w) submatrix.
+        """ read output from self.X
 
         ## TODO think about introducing conv stems for outpus. would encourage
-        ## interpratible, spatially localized representations I think..
+                10/26/24. now, looking at this, it seems clear that conv stems
+                are just a particular class of configurations of a network of
+                matrices with ceinsum connections. TODO make this mapping
+                explicit, take arbitrary network and express it as a ceinsum network.
+
+         ## interpratible, spatially localized representations I think..
             think this should be done outside the rtn..
-
-        ## But for now, we just pull output from some submatrix of the state, and
-        ## let the rtn implicitly find good representations. if we have a regular
-        ## sampling period, this should work out nicely.
-
+                10/26/24 .. hmm, yeah, outside the rtn might be wiser. in
+                theory its very nice to think of the whole thing as an rtn with
+                many subparts, but in practice it is good to make abstraction
+                boundaries
         """
         if self.color:
-            return self.X.reshape(self.flat_shape)[:, :, :3] # just use first three color channels for display
+            return self.X.reshape(self.flat_shape)[..., :3] # just use first three color channels for display
         return self.X.reshape(self.flat_shape)
 
 
-    def step(self, ker, C, inp=None, alpha=0.01, noise_fbk=0) -> np.ndarray:
+    def step(self, ker, C, inp=None, alpha=0.01, noise_fbk=0, verbose=False) -> np.ndarray:
         """
         update: X += alpha * dXdt
 
@@ -116,7 +128,21 @@ class RTN:
         prediction error and added to the state.
 
         """
-        dX = ceinsum(self.X, self.X, self.X.reshape(self.flat_shape), color=self.color)
+
+        def p(*args):
+            if verbose:
+                print(*args)
+        
+        p('-----------')
+        p('k.s', ker.shape)
+        p('X.s', self.X.shape)
+        p('C.s', C.shape)
+        p('-----------')
+
+        dX = np.empty_like(self.X)
+        for b in range(self.batch_dim):
+            dX[b] = ceinsum(self.X[b], ker[b], C[b], color=self.color, verbose=verbose)
+
         self.X = self.X + alpha * dX
 
         if noise_fbk > 0 and inp is not None:
