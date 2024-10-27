@@ -26,7 +26,9 @@ def main(args):
         fig = plt.figure(figsize=(14, 7))
         im_ax = fig.add_subplot()
 
-        im = im_ax.imshow(normalize(rtn.output()[0]), cmap='grey')
+
+        cmap = None if args.color else 'grey'
+        im = im_ax.imshow(normalize(rtn.output()[0]), cmap=cmap)
 
         alpha = 0
         noise_fbk = 0
@@ -45,15 +47,13 @@ def main(args):
                     inp = cv2.resize(inp, (w, h), interpolation = cv2.INTER_AREA) / 255.0
                     if not args.color:
                         inp = rgb2grey(inp)
-                    inp = inp.reshape(rtn.nested_shape[1:]) # everything but first (batch) dim
                     inp = np.stack([inp] * args.batch_dim, axis=0)
-                    assert np.all(inp.shape == rtn.X.shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
+                    assert np.all(inp.shape == rtn.output().shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
 
                 if inp is not None:
                     ker = inp
-                    inp = inp.reshape(rtn.flat_shape)
                 else:
-                    ker = rtn.X
+                    ker = rtn.X.reshape(rtn.flat_shape)
                 state = rtn.step(ker=ker, C=rtn.X.reshape(rtn.flat_shape), inp=inp, alpha=alpha, noise_fbk=noise_fbk)
 
                 yield t, state
@@ -120,7 +120,7 @@ if __name__ == '__main__':
         args.sample_period = args.sample_period or 1
 
     if args.color:
-        assert args.n >= 3, 'handling color for n < 3 not supported.'
+        assert args.n == 3, 'handling color for n != 3 not currently supported.'
 
     main(args)
 

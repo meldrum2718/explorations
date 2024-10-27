@@ -139,9 +139,11 @@ class RTN:
         p('C.s', C.shape)
         p('-----------')
 
+        ker = ker.reshape(self.nested_shape)
+
         dX = np.empty_like(self.X)
         for b in range(self.batch_dim):
-            dX[b] = ceinsum(self.X[b], ker[b], C[b], color=self.color, verbose=verbose)
+            dX[b] = ceinsum(self.X[b], ker[b], C[b], color=self.color, verbose=False)
 
         self.X = self.X + alpha * dX
 
