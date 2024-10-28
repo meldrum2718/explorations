@@ -22,11 +22,10 @@ def rgb2grey(im: np.ndarray):
 
 
 def normalize(im):
-    """ Make im zero mean and unit variance, then scale all pixels are [0, 1]
-        valued.
-    """
+    """ scale im pixels to [0, 1] """
     im = im.astype('float')
-    n = (im - np.mean(im)) / np.std(im) # zero mean, unit variance
-    n = n - np.min(n) # zero min
-    n = n / np.max(n) # 1 max
-    return n
+    if np.min(im) == np.max(im):
+        return (im * 0) + 0.5 # set all pixels to 0.5 if im is a constant
+    im = im - np.min(im) # zero min
+    im = im / np.max(im) # unit max
+    return im
