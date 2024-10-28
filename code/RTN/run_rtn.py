@@ -1,5 +1,4 @@
 import argparse
-# import tracemalloc
 
 import cv2
 import numpy as np
@@ -7,8 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
 
-from rtn import RTN
-from utils import get_video_capture, rgb2grey, normalize
+from .rtn import RTN
+from ..utils import get_video_capture, rgb2grey, normalize
 
 
 def main(args):
@@ -123,73 +122,3 @@ if __name__ == '__main__':
         assert args.n == 3, 'handling color for n != 3 not currently supported.'
 
     main(args)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-####### deprecated ###########
-
-# def sample_prod_params(X, n, k, batch_dim=None, color=False):
-#     """ Return parameters for a product of X with a subtensor of itself.
-# 
-#         Just going to do a really simple sampling for now. future, perhaps
-#         make it be more built/structured, like with a conv stem or so. For now
-#         it is going to just be directly computed from reading permutations and
-#         indices from submatrices of X in the top left-ish vicinity of X.
-# 
-#         Returns:
-#             (pre_xlp, pre_ksp, pre_ki, pre_klp), X_latent_perm, ker
-# 
-#         TODO think about instead returning ksp, knd, ki, klp. q: is this a nice general representation of the parameters into the product?. a: it seems nice for products between X and a subtensor of X.
-# 
-#     """
-#     
-#     if batch_dim is not None:
-#         X = X.reshape(n**batch_dim, n**k, n**batch_dim, n**k).reshape(0, 2, 1, 3)
-# 
-#     if color:
-#         X_ndim = 2 * k + 1
-#     else:
-#         X_ndim = 2 * k
-# 
-#     nested_shape = (n for _ in range(X_ndim))
-#     
-#     if color:
-#         X_color = X
-#         X = rgb2grey(X)
-#     X_latent_perm =   np.argsort(pre_xlp := np.sum(X[0:n, 0:X_ndim], axis=0))
-#     ker_sample_perm = np.argsort(pre_ksp := np.sum(X[2*n:3*n, 0:X_ndim], axis=0))
-#     ker_ndim =         np.argmax(pre_knd := np.sum(X[n:2*n, 0:k-2], axis=0)) + 2 # ker_ndim in [2, 3, ..., k]
-#     ker_indices = tuple(np.argmax(pre_ki := X[3*n:4*n, 0:X_ndim-ker_ndim], axis=0))
-#     ker_latent_perm = np.argsort(pre_klp := np.sum(X[4*n:5*n, 0:ker_ndim], axis=0))
-# 
-# 
-#     # print('x.s', X.shape, 'x.numel', X.size)
-#     # print('nested shape', nested_shape, 'ns.size')
-#     if color:
-#         X = X_color
-# 
-#     ker = X.reshape(*nested_shape)
-#     ker = ker.transpose(*ker_sample_perm)
-#     ker = ker[ker_indices]
-#     ker = ker.transpose(*ker_latent_perm)
-# 
-#     return (pre_xlp, pre_ksp, pre_ki, pre_klp), X_latent_perm, ker

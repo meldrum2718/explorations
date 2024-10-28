@@ -103,16 +103,15 @@ class RTN:
         """ read output from self.X
 
         ## TODO think about introducing conv stems for outpus. would encourage
+        ## interpratible, spatially localized representations I think..  think this should be done outside the rtn..
                 10/26/24. now, looking at this, it seems clear that conv stems
                 are just a particular class of configurations of a network of
                 matrices with ceinsum connections. TODO make this mapping
                 explicit, take arbitrary network and express it as a ceinsum network.
 
-         ## interpratible, spatially localized representations I think..
-            think this should be done outside the rtn..
-                10/26/24 .. hmm, yeah, outside the rtn might be wiser. in
-                theory its very nice to think of the whole thing as an rtn with
-                many subparts, but in practice it is good to make abstraction
+                hmm, although outside the rtn might be wiser. in theory its
+                very nice to think of the whole thing as an rtn with many
+                subparts, but in practice it is good to make abstraction
                 boundaries
         """
         if self.color:
