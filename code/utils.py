@@ -21,6 +21,27 @@ def rgb2grey(im: np.ndarray):
     return im[..., :3].dot([0.2989, 0.5870, 0.1140])
 
 
+def get_appropriate_dims_for_ax_grid(n) -> tuple:
+    """
+    Minimize np.abs(nrows - ncols),
+    subject to the constraints that:
+        nrows, ncols are both ints
+        nrows * ncols >= n
+
+    return (nrows, ncols)
+    """
+    best_dims = None
+    best_delta = np.inf
+    for ncols in range(1, n):
+    #  for ncols in range(np.ceil(n**.5), 0, -1): # need to test it before leaving this line uncommented
+        nrows = np.ceil(n / ncols).astype(int)
+        delta = np.abs(nrows - ncols)
+        if delta < best_delta:
+            best_delta = delta
+            best_dims = (nrows, ncols)
+    return best_dims
+
+
 def normalize(im):
     """ scale im pixels to [0, 1] """
     im = im.astype('float')

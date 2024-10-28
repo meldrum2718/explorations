@@ -1,77 +1,24 @@
 import numpy as np
 
-
-def ceinsum(X, Y, C, color, verbose=False) -> np.ndarray:
-    """ Return einsum of X and some subtensor of Y, with all indices
-        'read' from C.
-
-        X, ker are ndarrays with n = X.shape[i] = X.shape[j] = ker.shape[k] for all valid i,j,k.
-        C is a 2d array.
-
-    """
-    def p(*args):
-        if verbose:
-            print(*args)
-
-    n = X.shape[0]
-
-    if color: # design decision. just averaging color channels of C.
-        C = np.mean(C, axis=-1)
-
-    xnd = len(X.shape)
-    ynd = len(Y.shape)
-
-    p('x.s', X.shape, 'xnd', xnd)
-    p('y.s', Y.shape, 'ynd', ynd)
-    p('c.s', C.shape)
-
-    ch = C.shape[0]
-    n_samples = 5
-    sh = ch // n_samples # sampling height
-
-    p('sh', sh)
-
-    px = np.argsort(np.sum(C[0*sh:1*sh, 0:xnd], axis=0)) # X perm
-    po = np.argsort(np.sum(C[1*sh:2*sh, 0:xnd], axis=0)) # out perm
-    py = np.argsort(np.sum(C[2*sh:3*sh, 0:ynd], axis=0)) # Y perm
-
-    p('px.s', px.shape)
-    p('po.s', po.shape)
-    p('py.s', py.shape)
-
-    knd = np.argmax(np.sum(C[2*sh:3*sh, 0:ynd-2])) + 2 # number of kernel dimensions
-    nki = ynd - knd # number of kernel indices
-
-    pk = np.argsort(np.sum(C[3*sh:4*sh, 0:knd], axis=0)) # kernel perm
-
-    ki = tuple(np.argmax(C[4*sh:4*sh+n, 0:nki], axis=0)) # kernel indices
-    
-    p('knd', knd)
-    p('nki', nki)
-    p('ki', ki)
-    p('pk.s', pk)
-
-    ker = Y.transpose(*py)
-
-    p('ker1.s', ker.shape)
-    ker = ker[ki]
-    p('ker.s', ker.shape)
-
-    out = np.einsum(X, px, ker, pk, po)
-
-    p('out.s', out.shape)
-    p()
-
-    return out
-
-
 class RTN:
-    def __init__(self, n, k, batch_dim=0, color=False, clip_min=-2, clip_max=2, verbose=False):
+    """
+    A graph like object, G = (V, E). Simulates a dynamical system, where for v in V,
+        dv/dt = sum_{e = (u, v)} w(e) * ceinsum(u, e_ker, e_C)
+
+    Again, in the theme of lettting the dyn.sys control most parameters of the
+    dyn.sys, lets just parameterize w(e), e_ker, e_C with nodes in the network.
+
+    Observe that this structure allows for:
+        - kernel and control matrix sharing across the network
+        - the desirable property of having feedback flows (e.g. deeper representations can influence the processing of shallow representations)
+    """
+    def __init__(self, n, k, n_nodes, batch_dim=1, color=False, clip_min=-2, clip_max=2, verbose=False):
         """ initialize a random (n**k, n**k) state matrix.
         """
+        self.verbose = verbose
 
         def p(*args):
-            if verbose:
+            if self.verbose:
                 print(*args)
 
         self.n = n
@@ -80,29 +27,35 @@ class RTN:
         self.color = color
         self.clip_min = clip_min
         self.clip_max = clip_max
-        self.ndim = 2 * k
 
         self.flat_shape = (n**k, n**k)
         self.nested_shape = tuple([n for _ in range(2 * k)])
-
-        self.flat_shape = (batch_dim,) + self.flat_shape
-        self.nested_shape = (batch_dim,) + self.nested_shape
 
         if self.color:
             assert n >= 3, 'need n >=3 for color'
             self.flat_shape = self.flat_shape + (n,)
             self.nested_shape = self.nested_shape + (n,)
-            self.ndim += 1
+
+        self.ndim = len(self.nested_shape)
 
         p('flat shape', self.flat_shape)
         p('nested shape', self.nested_shape)
 
-        self.X: np.ndarray = np.random.randn(*self.flat_shape).reshape(self.nested_shape)
+        assert 5 <= n_nodes**2 <= n**k
 
-    def output(self):
+        self.n_nodes = n_nodes
+        self.nodes = [np.random.randn(batch_dim, *self.flat_shape) for _ in range(self.n_nodes)]
+
+        self.wei_idx = 0
+        self.ker_idx = 1
+        self.C_idx = 2
+        self.stdout_idx = 3
+        self.stdin_idx = 4
+
+    def output(self, idx=None):
         """ read output from self.X
 
-        ## TODO think about introducing conv stems for outpus. would encourage
+        ## TODO think about introducing conv stems for outputs. would encourage
         ## interpratible, spatially localized representations I think..  think this should be done outside the rtn..
                 10/26/24. now, looking at this, it seems clear that conv stems
                 are just a particular class of configurations of a network of
@@ -113,86 +66,231 @@ class RTN:
                 very nice to think of the whole thing as an rtn with many
                 subparts, but in practice it is good to make abstraction
                 boundaries
+
+                but also feel like rtn should be able to find the appropriate conv stems if given enough expressivity / direction
+                indeed reimplementing rtn as a network of ceinsum connections will hopefully take care of this.
         """
+        if idx is None:
+            idx = self.stdout_idx
         if self.color:
-            return self.X.reshape(self.flat_shape)[..., :3] # just use first three color channels for display
-        return self.X.reshape(self.flat_shape)
+            return self.nodes[idx][..., :3] # just use first three color channels for display for now
+        return self.nodes[idx]
 
+    def input(self, inp, idx=None, alpha=1):
+        """ update nodes[idx] as a convex combination with inp. """
+        if idx is None:
+            idx = self.stdin_idx
+        if self.color:
+            self.nodes[idx][..., 0:3] = alpha * inp[..., 0:3]  +  (1 - alpha) * self.nodes[idx][..., 0:3]
+        else:
+            self.nodes[idx] = alpha * inp  +  (1 - alpha) * self.nodes[idx]
 
-    def step(self, ker, C, inp=None, alpha=0.01, noise_fbk=0, verbose=False) -> np.ndarray:
-        """
-        update: X += alpha * dXdt
+    def ceinsum(self, X, Y, C) -> np.ndarray:
+        """ Return einsum of X and some subtensor of Y, with all indices
+            'read' from C.
 
-        noise_fbk controls the size of the base noise, which is then scaled by
-        prediction error and added to the state.
-
+            X, ker are ndarrays with n = X.shape[i] = X.shape[j] = ker.shape[k] for all valid i,j,k.
+            C is a 2d array.
         """
 
         def p(*args):
-            if verbose:
+            if self.verbose:
                 print(*args)
+
+        X = X.reshape(self.nested_shape)
+        Y = Y.reshape(self.nested_shape)
+
+        if self.color: # TODO design decision. just averaging color channels of C for now.
+            C = np.mean(C, axis=-1)
+
+        p('x.s', X.shape)
+        p('y.s', Y.shape)
+        p('c.s', C.shape)
+
+        ch = C.shape[0]
+        n_samples = 5
+        sh = ch // n_samples # sampling height
+
+        p('sh', sh)
+
+        px = np.argsort(np.sum(C[0*sh:1*sh, 0:self.ndim], axis=0)) # X perm
+        po = np.argsort(np.sum(C[1*sh:2*sh, 0:self.ndim], axis=0)) # out perm
+        py = np.argsort(np.sum(C[2*sh:3*sh, 0:self.ndim], axis=0)) # Y perm
+
+        p('px.s', px.shape)
+        p('po.s', po.shape)
+        p('py.s', py.shape)
+
+        knd = np.argmax(np.sum(C[2*sh:3*sh, 0:self.ndim-2])) + 2 # number of kernel dimensions
+        nki = self.ndim - knd # number of kernel indices
+
+        pk = np.argsort(np.sum(C[3*sh:4*sh, 0:knd], axis=0)) # kernel perm
+
+        ki = tuple(np.argmax(C[4*sh:4*sh+self.n, 0:nki], axis=0)) # kernel indices
         
-        p('-----------')
-        p('k.s', ker.shape)
-        p('X.s', self.X.shape)
-        p('C.s', C.shape)
-        p('-----------')
+        p('knd', knd)
+        p('nki', nki)
+        p('ki', ki)
+        p('pk.s', pk)
 
-        ker = ker.reshape(self.nested_shape)
+        ker = Y.transpose(*py)
 
-        dX = np.empty_like(self.X)
-        for b in range(self.batch_dim):
-            dX[b] = ceinsum(self.X[b], ker[b], C[b], color=self.color, verbose=False)
+        p('ker1.s', ker.shape)
+        ker = ker[ki]
+        p('ker.s', ker.shape)
 
-        self.X = self.X + alpha * dX
+        out = np.einsum(X, px, ker, pk, po)
 
-        if noise_fbk > 0 and inp is not None:
-            noise = np.random.normal(scale=noise_fbk, size=self.X.shape)
-            err = np.linalg.norm(inp - self.output())
-            noise = noise * err
-            self.X = self.X + noise
+        out = out.reshape(self.flat_shape)
 
-        self.X = np.clip(self.X, self.clip_min, self.clip_max)
+        p('out.s', out.shape)
+        p()
 
-        return self.output()
+        return out
+
+    def step(self, alpha=0.01):
+        """
+        update: X += alpha * dXdt
+        """
+
+        def p(*args):
+            if self.verbose:
+                print(*args)
+
+        # just loop over for now.. wonder if we save much by vectorizing..
+        # probably when n_nodes grows a bit.. definitely in fact.. ah well
+        # going to just implement first in python.
+
+        for i, x in enumerate(self.nodes):
+            dxdt = np.zeros(x.shape)
+            for j, nei in enumerate(self.nodes):
+                for b in range(self.batch_dim):
+                    w = self.wei(b, j, i)
+                    #if np.abs(w) > 0.01: # TODO magic number
+                    p('w', w)
+                    p('nei[b].shape', nei[b].shape)
+                    ker = self.ker(b, j, i)
+                    C = self.C(b, j, i)
+                    p('ker.shape', ker.shape)
+                    p('C.shape', C.shape)
+                    p('dxdt.shape', dxdt.shape)
+
+                    dxdt[b] += w * self.ceinsum(nei[b], ker, C)
+            x = x  + alpha * dxdt
+            x = np.clip(x, self.clip_min, self.clip_max)
+            self.nodes[i] = x
+
+    def wei(self, b, i, j):
+        """ Return the weight of the edge (i -> j)
+
+            have 0 <= i, j <= n_nodes
+
+            assume n_nodes <= n**k
+
+            then can very simply just read from the top left
+            [:n_nodes, :n_nodes] submatrix.
+        """
+        W = self.nodes[self.wei_idx]
+        if self.color:
+            return np.mean(W[b, i, j])
+        return W[b, i, j]
+
+
+    def ker(self, b, i, j):
+        """ Return the kernel associated with the edge (i -> j)
+            Hence we need an index 0 <= idx <= n_nodes.
+
+            assume n_nodes**2 <= n**k
+
+            we are looking for the adjacency matrix of a matching in a
+            bipartite graph between edges and nodes then just need (n_nodes**2,
+            n_nodes) 0-1 matrix with all rows summing to 1.
+
+            then:
+        """
+        K = self.nodes[self.ker_idx]
+        K = K[b]
+        if self.color:
+            K = np.mean(K, axis=-1)
+        K = K[0:self.n_nodes**2, 0:self.n_nodes]
+        K = np.argmax(K, axis=-1)
+        K = K.reshape(self.n_nodes, self.n_nodes)
+        return self.nodes[K[i, j]][b]
+
+
+    def C(self, b, i, j):
+        """ same procedure as for above """
+        _C = self.nodes[self.ker_idx]
+        _C = _C[b]
+        if self.color:
+            _C = np.mean(_C, axis=-1)
+        _C = np.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], axis=-1).reshape(self.n_nodes, self.n_nodes)
+        return self.nodes[_C[i, j]][b]
 
 
 
 
-    ## I dont think i want this..
-    # def input(self, inp):
-    #     """ inject inp into bottom right corner of self.X.
-    #         TODO do this better, this feels crude.
-    #     """
-    #     if inp is None:
-    #         print('trying to input None into rtn .. why tho?')
-    #         return
-    #     h, w = inp.shape[:2]
-    #     x = self.X
-    #     if self.batch_dim:
-    #         x = x.reshape(self.n**self.batch_dim, self.n**k, self.n**self.batch_dim, self.n**k).transpose(0, 2, 1, 1)
 
-    #     if self.color:
-    #         x[-h:, -w:, :3] += inp
-    #     else:
-    #         x[-h:, -w:] += inp
-
-    #     if self.batch_dim:
-    #         # reshape back.
-    #         x = x.reshape(self.n**self.batch_dim, self.n**k, self.n**self.batch_dim, self.n**k).transpose(0, 2, 1, 1)
-    #         x = x.transpose(0, 2, 1, 3).reshape(self.X.shape)
-    #         print('unbatching')
-
-    #     self.X = x
-
-
-    # def prod(self, ker, latent_shape, latent_perm) -> np.ndarray:
-    #     """ reshape x0 into latent_shape, apply permutation, multiply by ker,
-    #         then invert permutation and reshape back to original shape.
-    #     """
-    #     inv_perm = inv_p(latent_perm)
-    #     x1 = self.X.reshape(*latent_shape).transpose(*latent_perm)
-    #     out1 = x1 @ ker
-    #     out0 = out1.transpose(*inv_perm).reshape(self.X.shape)
-    #     return out0
+# def ceinsum(X, Y, C, color, verbose=False) -> np.ndarray:
+#     """ Return einsum of X and some subtensor of Y, with all indices
+#         'read' from C.
+# 
+#         X, ker are ndarrays with n = X.shape[i] = X.shape[j] = ker.shape[k] for all valid i,j,k.
+#         C is a 2d array.
+# 
+#     """
+#     def p(*args):
+#         if verbose:
+#             print(*args)
+# 
+#     n = X.shape[0]
+# 
+#     if color: # design decision. just averaging color channels of C.
+#         C = np.mean(C, axis=-1)
+# 
+#     xnd = len(X.shape)
+#     ynd = len(Y.shape)
+# 
+#     p('x.s', X.shape, 'xnd', xnd)
+#     p('y.s', Y.shape, 'ynd', ynd)
+#     p('c.s', C.shape)
+# 
+#     ch = C.shape[0]
+#     n_samples = 5
+#     sh = ch // n_samples # sampling height
+# 
+#     p('sh', sh)
+# 
+#     px = np.argsort(np.sum(C[0*sh:1*sh, 0:xnd], axis=0)) # X perm
+#     po = np.argsort(np.sum(C[1*sh:2*sh, 0:xnd], axis=0)) # out perm
+#     py = np.argsort(np.sum(C[2*sh:3*sh, 0:ynd], axis=0)) # Y perm
+# 
+#     p('px.s', px.shape)
+#     p('po.s', po.shape)
+#     p('py.s', py.shape)
+# 
+#     knd = np.argmax(np.sum(C[2*sh:3*sh, 0:ynd-2])) + 2 # number of kernel dimensions
+#     nki = ynd - knd # number of kernel indices
+# 
+#     pk = np.argsort(np.sum(C[3*sh:4*sh, 0:knd], axis=0)) # kernel perm
+# 
+#     ki = tuple(np.argmax(C[4*sh:4*sh+n, 0:nki], axis=0)) # kernel indices
+#     
+#     p('knd', knd)
+#     p('nki', nki)
+#     p('ki', ki)
+#     p('pk.s', pk)
+# 
+#     ker = Y.transpose(*py)
+# 
+#     p('ker1.s', ker.shape)
+#     ker = ker[ki]
+#     p('ker.s', ker.shape)
+# 
+#     out = np.einsum(X, px, ker, pk, po)
+# 
+#     p('out.s', out.shape)
+#     p()
+# 
+#     return out
 

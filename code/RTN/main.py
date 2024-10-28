@@ -7,7 +7,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
 
 from .rtn import RTN
-from ..utils import get_video_capture, rgb2grey, normalize
+from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid
 
 
 def main(args):
@@ -20,19 +20,27 @@ def main(args):
 
         h = w = n**k
 
-        rtn = RTN(n, k, batch_dim=args.batch_dim, color=args.color, clip_min=args.clip_min, clip_max=args.clip_max)
+        rtn = RTN(n=n,
+                  k=k,
+                  n_nodes=args.n_nodes,
+                  batch_dim=args.batch_dim,
+                  color=args.color,
+                  clip_min=args.clip_min,
+                  clip_max=args.clip_max,
+        )
 
-        fig = plt.figure(figsize=(14, 7))
-        im_ax = fig.add_subplot()
-
+        axh, axw = get_appropriate_dims_for_ax_grid(args.n_nodes)
+        fig, axs = plt.subplots(axh, axw)
+        axs = axs.reshape(-1)
 
         cmap = None if args.color else 'grey'
-        im = im_ax.imshow(normalize(rtn.output()[0]), cmap=cmap)
+
+        ims = [axs[i].imshow(normalize(rtn.output(i)[0]), cmap=cmap) for i in range(args.n_nodes)]
 
         alpha = 0
         noise_fbk = 0
 
-        def frame_gen():
+        def step():
             nonlocal alpha
             nonlocal noise_fbk
             t = 0
@@ -50,24 +58,33 @@ def main(args):
                     assert np.all(inp.shape == rtn.output().shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
 
                 if inp is not None:
-                    ker = inp
-                else:
-                    ker = rtn.X.reshape(rtn.flat_shape)
-                state = rtn.step(ker=ker, C=rtn.X.reshape(rtn.flat_shape), inp=inp, alpha=alpha, noise_fbk=noise_fbk)
+                    rtn.input(inp)
 
-                yield t, state
+                rtn.step(alpha=alpha)
+
+                # if noise_fbk > 0 and inp is not None:
+                #     noise = np.random.normal(scale=noise_fbk, size=rtn.X.shape)
+                #     err = np.linalg.norm(inp - rtn.output())
+                #     noise = noise * err
+                #     rtn.X = rtn.X + noise
+
+                state = rtn.nodes
+
+                yield t, rtn
 
         def draw_func(frame):
-            t, state = frame
-            state = state[0] # for now, just look at first row in batch dim
-            im.set_data(normalize(state))
+            ## for node in rtn.nodes: imshow(node.output()). 
+            t, rtn = frame
+            for i in range(args.n_nodes):
+                state = rtn.output(i)[0] # for now, just look at first row in batch dim
+                ims[i].set_data(normalize(state))
             fig.suptitle(str(t))
-            return [im]
+            return ims
 
         ani = FuncAnimation(
             fig,
             func=draw_func,
-            frames=frame_gen,
+            frames=step,
             interval=10,
             save_count=1,
         )
@@ -78,11 +95,11 @@ def main(args):
         alpha_slider = Slider(fig.add_axes([0.2, 0.05, 0.65, 0.03]), label=r'$\alpha$', valmin=args.alphamin, valmax=args.alphamax, valinit=alpha)
         alpha_slider.on_changed(update_alpha)
 
-        def update_noise_fbk(x):
-            nonlocal noise_fbk
-            noise_fbk = x
-        noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
-        noise_fbk_slider.on_changed(update_noise_fbk)
+        # def update_noise_fbk(x):
+        #     nonlocal noise_fbk
+        #     noise_fbk = x
+        # noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
+        # noise_fbk_slider.on_changed(update_noise_fbk)
 
         plt.show()
 
@@ -98,6 +115,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n', required=True, type=int)
     parser.add_argument('--k', required=True, type=int)
+    parser.add_argument('--n_nodes', required=True, type=int)
     parser.add_argument('--video_input', action='store_true')
     parser.add_argument('--color', '-c', action='store_true')
     parser.add_argument('--clip_min', '-cmi', default=-2, type=float)
