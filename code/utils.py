@@ -1,6 +1,7 @@
 import platform
 
 import cv2
+import torch
 import numpy as np
 
 
@@ -44,11 +45,17 @@ def get_appropriate_dims_for_ax_grid(n) -> tuple:
 
 def normalize(im):
     """ scale im pixels to [0, 1] """
-    im = im.astype('float')
-    if np.min(im) == np.max(im):
-        return (im * 0) + 0.5 # set all pixels to 0.5 if im is a constant
-    im = im - np.min(im) # zero min
-    im = im / np.max(im) # unit max
+    try:
+        im = im.astype('float')
+    except AttributeError:
+        pass
+    try:
+        im = im.to(torch.float32)
+    except AttributeError:
+        pass
+
+    im = im - im.min() # zero min
+    im = im / (im.max() + 1e-9) # unit max
     return im
 
 
@@ -58,8 +65,13 @@ def inspect(label, im):
     print(label + ':')
     print('shape:', im.shape)
     print('dtype:', im.dtype)
-    print('max:', np.max(im))
-    print('min:', np.min(im))
-    print('mean:', np.mean(im))
-    print('std:', np.std(im))
+    print('min:', im.min())
+    print('max:', im.max())
+
+    try:
+        print('mean:', im.mean())
+        print('std:', im.std())
+    except:
+        pass
+
     print()

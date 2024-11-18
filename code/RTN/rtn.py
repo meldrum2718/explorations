@@ -1,4 +1,6 @@
-import numpy as np
+import torch
+
+from ..utils import inspect
 
 class RTN:
     """
@@ -29,12 +31,16 @@ class RTN:
         self.clip_max = clip_max
 
         self.flat_shape = (n**k, n**k)
-        self.nested_shape = tuple([n for _ in range(2 * k)])
+        self.nested_shape = (n,) * (2*k)
 
         if self.color:
             assert n >= 3, 'need n >=3 for color'
             self.flat_shape = self.flat_shape + (n,)
             self.nested_shape = self.nested_shape + (n,)
+        else:
+            # lets always have a channel dim at the end
+            self.flat_shape = self.flat_shape + (1,)
+            self.nested_shape = self.nested_shape + (1,)
 
         self.ndim = len(self.nested_shape)
 
@@ -44,8 +50,9 @@ class RTN:
         assert 5 <= n_nodes**2 <= n**k
 
         self.n_nodes = n_nodes
-        self.nodes = [np.random.randn(batch_dim, *self.flat_shape) for _ in range(self.n_nodes)]
+        self.nodes = torch.randn(n_nodes, batch_dim, *self.flat_shape) # 
 
+        ## TODO do this bit better. at least dont have it fixed and inflexible. think about doing different sized states for wei, ker, c_idx. perhaps an interpolation (graphon like)
         self.wei_idx = 0
         self.ker_idx = 1
         self.C_idx = 2
@@ -78,14 +85,23 @@ class RTN:
 
     def input(self, inp, idx=None, alpha=1):
         """ update nodes[idx] as a convex combination with inp. """
+        H, W, C = inp.shape
+        if self.color:
+            assert C == 3
+        else:
+            assert C == 1
+
         if idx is None:
             idx = self.stdin_idx
+
+        inp = inp.unsqueeze(0) # put a batch dim in there
+
         if self.color:
             self.nodes[idx][..., 0:3] = alpha * inp[..., 0:3]  +  (1 - alpha) * self.nodes[idx][..., 0:3]
         else:
             self.nodes[idx] = alpha * inp  +  (1 - alpha) * self.nodes[idx]
 
-    def ceinsum(self, X, Y, C) -> np.ndarray:
+    def ceinsum(self, X, Y, C) -> torch.Tensor:
         """ Return einsum of X and some subtensor of Y, with all indices
             'read' from C.
 
@@ -100,46 +116,51 @@ class RTN:
         X = X.reshape(self.nested_shape)
         Y = Y.reshape(self.nested_shape)
 
-        if self.color: # TODO design decision. just averaging color channels of C for now.
-            C = np.mean(C, axis=-1)
+        # looks like im already avering in the self.C() function whos output gets passed here
+        ## if self.color: # TODO design decision. just averaging color channels of C for now.
+        ##     ## TODO design decision. here, choosing to take a single control matrix C for all the batch dim. i.e. just averaging 
+        C = torch.mean(C, dim=-1) # average over channel dim of C
+        ##     C = torch.mean(C, dim=(0, 1)) # average over both batch and channel dim of C
+        assert len(C.shape) == 2, 'expect C to be a 2d tensor for reading off einsum params'
 
         p('x.s', X.shape)
         p('y.s', Y.shape)
         p('c.s', C.shape)
 
-        ch = C.shape[0]
+        ch = C.shape[-2]
         n_samples = 5
         sh = ch // n_samples # sampling height
 
         p('sh', sh)
 
-        px = np.argsort(np.sum(C[0*sh:1*sh, 0:self.ndim], axis=0)) # X perm
-        po = np.argsort(np.sum(C[1*sh:2*sh, 0:self.ndim], axis=0)) # out perm
-        py = np.argsort(np.sum(C[2*sh:3*sh, 0:self.ndim], axis=0)) # Y perm
+        ## here is where we could really benefit from downsampling C to be the right shape.. feels incredibly arbitrary to just take the first few columns of C as giving the parameters. why not using all of C?
+        px = torch.argsort(torch.sum(C[0*sh:1*sh, 0:self.ndim], dim=0)) # X perm
+        po = torch.argsort(torch.sum(C[1*sh:2*sh, 0:self.ndim], dim=0)) # out perm
+        py = torch.argsort(torch.sum(C[2*sh:3*sh, 0:self.ndim], dim=0)) # Y perm
 
         p('px.s', px.shape)
         p('po.s', po.shape)
         p('py.s', py.shape)
 
-        knd = np.argmax(np.sum(C[2*sh:3*sh, 0:self.ndim-2])) + 2 # number of kernel dimensions
+        knd = torch.argmax(torch.sum(C[2*sh:3*sh, 0:self.ndim-2])) + 2 # number of kernel dimensions
         nki = self.ndim - knd # number of kernel indices
 
-        pk = np.argsort(np.sum(C[3*sh:4*sh, 0:knd], axis=0)) # kernel perm
+        pk = torch.argsort(torch.sum(C[3*sh:4*sh, 0:knd], dim=0)) # kernel perm
 
-        ki = tuple(np.argmax(C[4*sh:4*sh+self.n, 0:nki], axis=0)) # kernel indices
+        ki = tuple(torch.argmax(C[4*sh:4*sh+self.n, 0:nki], dim=0)) # kernel indices
         
         p('knd', knd)
         p('nki', nki)
         p('ki', ki)
         p('pk.s', pk)
 
-        ker = Y.transpose(*py)
+        ker = Y.permute(*py)
 
         p('ker1.s', ker.shape)
         ker = ker[ki]
         p('ker.s', ker.shape)
 
-        out = np.einsum(X, px, ker, pk, po)
+        out = torch.einsum(X, px, ker, pk, po)
 
         out = out.reshape(self.flat_shape)
 
@@ -151,6 +172,8 @@ class RTN:
     def step(self, alpha=0.01):
         """
         update: X += alpha * dXdt
+
+        ## TODO make alpha be something more interesting than just slider controlled probably.. lets let the network parameterize this i think. or potentially, when building more hand cratfted architectures, would presumably like to be able to control the 'inertia' (alpha) of the various nodes.. 
         """
 
         def p(*args):
@@ -162,7 +185,7 @@ class RTN:
         # going to just implement first in python.
 
         for i, x in enumerate(self.nodes):
-            dxdt = np.zeros(x.shape)
+            dxdt = torch.zeros_like(x)
             for j, nei in enumerate(self.nodes):
                 for b in range(self.batch_dim):
                     w = self.wei(b, j, i)
@@ -176,8 +199,8 @@ class RTN:
                     p('dxdt.shape', dxdt.shape)
 
                     dxdt[b] += w * self.ceinsum(nei[b], ker, C)
-            x = x  + alpha * dxdt
-            x = np.clip(x, self.clip_min, self.clip_max)
+            x = x + alpha * dxdt
+            x = torch.clip(x, self.clip_min, self.clip_max)
             self.nodes[i] = x
 
     def wei(self, b, i, j):
@@ -191,9 +214,7 @@ class RTN:
             [:n_nodes, :n_nodes] submatrix.
         """
         W = self.nodes[self.wei_idx]
-        if self.color:
-            return np.mean(W[b, i, j])
-        return W[b, i, j]
+        return torch.mean(W[b, i, j]) # average over channel dim
 
 
     def ker(self, b, i, j):
@@ -209,22 +230,20 @@ class RTN:
             then:
         """
         K = self.nodes[self.ker_idx]
-        K = K[b]
-        if self.color:
-            K = np.mean(K, axis=-1)
+        K = K[b] # index into batch dim
+        K = torch.mean(K, dim=-1) # average over channel dim
         K = K[0:self.n_nodes**2, 0:self.n_nodes]
-        K = np.argmax(K, axis=-1)
+        K = torch.argmax(K, dim=-1)
         K = K.reshape(self.n_nodes, self.n_nodes)
         return self.nodes[K[i, j]][b]
 
 
     def C(self, b, i, j):
         """ same procedure as for above """
-        _C = self.nodes[self.ker_idx]
-        _C = _C[b]
-        if self.color:
-            _C = np.mean(_C, axis=-1)
-        _C = np.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], axis=-1).reshape(self.n_nodes, self.n_nodes)
+        _C = self.nodes[self.ker_idx] ## TODO this should be self.C_idx .. going to leav it unchanged now because ideally want to recover identical behavior to the numpy implementation just in torch. But yeah fix this.
+        _C = _C[b] # index into batch dim
+        _C = torch.mean(_C, dim=-1) # average over channel dim
+        _C = torch.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], axis=-1).reshape(self.n_nodes, self.n_nodes)
         return self.nodes[_C[i, j]][b]
 
 

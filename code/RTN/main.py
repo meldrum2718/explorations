@@ -1,6 +1,7 @@
 import argparse
 
 import cv2
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -36,7 +37,8 @@ def main(args):
 
         cmap = None if args.color else 'grey'
 
-        ims = [axs[i].imshow(normalize(rtn.output(i)[0]), cmap=cmap) for i in range(args.n_nodes)]
+        state = normalize(torch.mean(rtn.nodes, dim=1)).detach().cpu().numpy() # average over batch dim, then normalize
+        ims = [axs[i].imshow(state[i], cmap=cmap) for i in range(args.n_nodes)]
 
         alpha = 0
         noise_fbk = 0
@@ -53,36 +55,30 @@ def main(args):
                     # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
                     inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
                     inp = cv2.resize(inp, (w, h), interpolation = cv2.INTER_AREA) / 255.0
+                    inp = torch.Tensor(inp) # (H, W, C)
                     if not args.color:
-                        inp = rgb2grey(inp)
-                    inp = np.stack([inp] * args.batch_dim, axis=0)
-                    assert np.all(inp.shape == rtn.output().shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
+                        inp = inp
+                        inp = torch.mean(inp, dim=0).unsqueeze(0)
+                    # assert np.all(inp.shape == rtn.output().shape), f'inp shape: {inp.shape},   rtn.out.shape: {rtn.output().shape}'
 
                 if inp is not None:
                     rtn.input(inp)
 
                 rtn.step(alpha=alpha)
 
+                ## TODO write better logic for when noise feedback happens. want every time? just whien noise_fbk min/max is passed?  separate flag for whether or not to include noise probably..
                 if noise_fbk > 0 and inp is not None:
-                    for idx in range(rtn.n_nodes):
-                        node = rtn.nodes[idx]
-                        noise = np.random.normal(scale=noise_fbk, size=rtn.nodes[idx].shape)
-                        #err = np.linalg.norm(inp - rtn.output()) ## commenting this out for right now. just want to add noise to the system, but really to add noise with some sort of response to prediction error should be done across a batch dimension, inside the rtn code, not here in main.py
-                        noise = noise # * err
-                        rtn.nodes[idx] = node + noise
-
-                state = rtn.nodes
+                    noise = noise_fbk * torch.randn_like(rtn.nodes)
+                    rtn.nodes += noise
 
                 yield t, rtn
 
         def draw_func(frame):
             ## for node in rtn.nodes: imshow(node.output()). 
             t, rtn = frame
+            state = normalize(torch.mean(rtn.nodes, dim=1)).detach().cpu().numpy() # average over batch dim, then normalize
             for i in range(args.n_nodes):
-                state = rtn.output(i)[0] # for now, just look at first row in batch dim
-                state = normalize(state)
-                # inspect('state', state)
-                ims[i].set_data(state)
+                ims[i].set_data(state[i])
             fig.suptitle(str(t))
             return ims
 
