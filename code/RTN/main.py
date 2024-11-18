@@ -66,8 +66,7 @@ def main(args):
 
                 rtn.step(alpha=alpha)
 
-                ## TODO write better logic for when noise feedback happens. want every time? just whien noise_fbk min/max is passed?  separate flag for whether or not to include noise probably..
-                if noise_fbk > 0 and inp is not None:
+                if args.use_noise_fbk:
                     noise = noise_fbk * torch.randn_like(rtn.nodes)
                     rtn.nodes += noise
 
@@ -96,11 +95,12 @@ def main(args):
         alpha_slider = Slider(fig.add_axes([0.2, 0.05, 0.65, 0.03]), label=r'$\alpha$', valmin=args.alphamin, valmax=args.alphamax, valinit=alpha)
         alpha_slider.on_changed(update_alpha)
 
-        def update_noise_fbk(x):
-            nonlocal noise_fbk
-            noise_fbk = x
-        noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
-        noise_fbk_slider.on_changed(update_noise_fbk)
+        if args.use_noise_fbk:
+            def update_noise_fbk(x):
+                nonlocal noise_fbk
+                noise_fbk = x
+            noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
+            noise_fbk_slider.on_changed(update_noise_fbk)
 
         plt.show()
 
@@ -124,8 +124,8 @@ if __name__ == '__main__':
     parser.add_argument('--sample_period', '-sp', default=None, type=int)
     parser.add_argument('--alphamin', required=False, default='0', type=float)
     parser.add_argument('--alphamax', required=False, default='1', type=float)
-    parser.add_argument('--noise_fbk_min', required=False, default='0', type=float)
-    parser.add_argument('--noise_fbk_max', required=False, default='0.01', type=float)
+    parser.add_argument('--noise_fbk_min', required=False, default=None, type=float)
+    parser.add_argument('--noise_fbk_max', required=False, default=None, type=float)
     parser.add_argument('--batch_dim', '-bd', default=1, type=int)
 
 
@@ -139,5 +139,9 @@ if __name__ == '__main__':
 
     if args.color:
         assert args.n == 3, 'handling color for n != 3 not currently supported.'
+
+    args.use_noise_fbk = (None not in [args.noise_fbk_min, args.noise_fbk_max])
+
+
 
     main(args)
