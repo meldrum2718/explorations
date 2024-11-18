@@ -7,7 +7,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
 
 from .rtn import RTN
-from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid
+from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid, inspect
 
 
 def main(args):
@@ -32,6 +32,7 @@ def main(args):
         axh, axw = get_appropriate_dims_for_ax_grid(args.n_nodes)
         fig, axs = plt.subplots(axh, axw)
         axs = axs.reshape(-1)
+        for ax in axs: ax.axis('off')
 
         cmap = None if args.color else 'grey'
 
@@ -62,11 +63,13 @@ def main(args):
 
                 rtn.step(alpha=alpha)
 
-                # if noise_fbk > 0 and inp is not None:
-                #     noise = np.random.normal(scale=noise_fbk, size=rtn.X.shape)
-                #     err = np.linalg.norm(inp - rtn.output())
-                #     noise = noise * err
-                #     rtn.X = rtn.X + noise
+                if noise_fbk > 0 and inp is not None:
+                    for idx in range(rtn.n_nodes):
+                        node = rtn.nodes[idx]
+                        noise = np.random.normal(scale=noise_fbk, size=rtn.nodes[idx].shape)
+                        #err = np.linalg.norm(inp - rtn.output()) ## commenting this out for right now. just want to add noise to the system, but really to add noise with some sort of response to prediction error should be done across a batch dimension, inside the rtn code, not here in main.py
+                        noise = noise # * err
+                        rtn.nodes[idx] = node + noise
 
                 state = rtn.nodes
 
@@ -77,7 +80,9 @@ def main(args):
             t, rtn = frame
             for i in range(args.n_nodes):
                 state = rtn.output(i)[0] # for now, just look at first row in batch dim
-                ims[i].set_data(normalize(state))
+                state = normalize(state)
+                # inspect('state', state)
+                ims[i].set_data(state)
             fig.suptitle(str(t))
             return ims
 
@@ -95,11 +100,11 @@ def main(args):
         alpha_slider = Slider(fig.add_axes([0.2, 0.05, 0.65, 0.03]), label=r'$\alpha$', valmin=args.alphamin, valmax=args.alphamax, valinit=alpha)
         alpha_slider.on_changed(update_alpha)
 
-        # def update_noise_fbk(x):
-        #     nonlocal noise_fbk
-        #     noise_fbk = x
-        # noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
-        # noise_fbk_slider.on_changed(update_noise_fbk)
+        def update_noise_fbk(x):
+            nonlocal noise_fbk
+            noise_fbk = x
+        noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise feedback', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_fbk)
+        noise_fbk_slider.on_changed(update_noise_fbk)
 
         plt.show()
 

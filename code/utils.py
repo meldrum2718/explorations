@@ -50,3 +50,16 @@ def normalize(im):
     im = im - np.min(im) # zero min
     im = im / np.max(im) # unit max
     return im
+
+
+def inspect(label, im):
+    """ Print some basic image stats."""
+    print()
+    print(label + ':')
+    print('shape:', im.shape)
+    print('dtype:', im.dtype)
+    print('max:', np.max(im))
+    print('min:', np.min(im))
+    print('mean:', np.mean(im))
+    print('std:', np.std(im))
+    print()
