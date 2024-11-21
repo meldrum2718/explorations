@@ -184,6 +184,9 @@ class RTN:
         # probably when n_nodes grows a bit.. definitely in fact.. ah well
         # going to just implement first in python.
 
+        ## TODO make this better. really basically unusuable for higher batch
+        ## dim and higher number of nodes. this impl does not scale.
+
         for i, x in enumerate(self.nodes):
             dxdt = torch.zeros_like(x)
             for j, nei in enumerate(self.nodes):
@@ -240,13 +243,11 @@ class RTN:
 
     def C(self, b, i, j):
         """ same procedure as for above """
-        _C = self.nodes[self.ker_idx] ## TODO this should be self.C_idx .. going to leav it unchanged now because ideally want to recover identical behavior to the numpy implementation just in torch. But yeah fix this.
+        _C = self.nodes[self.C_idx]
         _C = _C[b] # index into batch dim
         _C = torch.mean(_C, dim=-1) # average over channel dim
-        _C = torch.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], axis=-1).reshape(self.n_nodes, self.n_nodes)
+        _C = torch.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], dim=-1).reshape(self.n_nodes, self.n_nodes)
         return self.nodes[_C[i, j]][b]
-
-
 
 
 
