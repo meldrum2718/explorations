@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 import networkx as nx
 
-
 from ..utils import inspect, normalize
 
 class CAN:
@@ -32,7 +31,7 @@ class CAN:
         G: nx.DiGraph,
         clip_min: int = -2,
         clip_max: int = 2,
-        verbose: bool = False
+        verbose: bool = False,
     ):
 
         self.verbose = verbose
@@ -101,22 +100,21 @@ class CAN:
             if self.verbose:
                 print(*args)
 
-        # just loop over for now.. wonder if we save much by vectorizing..
-        # probably when n_nodes grows a bit.. definitely in fact.. ah well
-        # going to just implement first in python.
-
-        ## TODO make this better. really basically unusuable for higher batch
-        ## dim and higher number of nodes. this impl does not scale.
-        
-
+        ## TODO come up with a principled way of doing this.. 
+        ## TODO think about doing some learned linear transformations, i.e. with mha or something..
+        dxdt = torch.zeros_like(self.state)
         for u, v in self.G.edges:
-            self.state[v] += alpha * F.scaled_dot_product_attention(
-                self.state[u].permute(0, 1, 3, 2),
-                self.state[u].permute(0, 1, 3, 2),
-                self.state[v].permute(0, 1, 3, 2)
+            dxdt[v] += F.scaled_dot_product_attention(
+                self.state[v],
+                self.state[v],
+                self.state[u].permute(0, 1, 3, 2)
             )
+        self.state += alpha * dxdt
 
-            self.state = torch.clip(self.state, self.clip_min, self.clip_max)
+
+        self.state = torch.clip(self.state, self.clip_min, self.clip_max)
+        # self.state = torch.frac(self.state)
+        # self.state = normalize(self.state)
 
 
 

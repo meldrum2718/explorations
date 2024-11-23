@@ -12,6 +12,12 @@ from .coupled_attn_net import CAN
 from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid, inspect, plot
 
 
+
+## TODO lets try to optimize.
+## outer optimization over the graphs
+## ## inner optimization over a batch dimenstion, stochastic perturbations of
+#     the state ya know.. genetic algorithm like..
+
 def main(args):
     cap = None
     try:
@@ -20,6 +26,10 @@ def main(args):
             cap = get_video_capture()
 
         G = nx.barabasi_albert_graph(args.n_nodes, 3) ## TODO design decision
+        # G = nx.turan_graph(args.n_nodes, 3) ## TODO design decision
+        # G = nx.path_graph(args.n_nodes) ## TODO design decision
+        # G = nx.random_geometric_graph(args.n_nodes, 0.2) ## TODO design decision
+        G = nx.DiGraph(G)
         plot(G)
 
         can = CAN(
@@ -68,7 +78,10 @@ def main(args):
                 can.step(alpha=alpha)
 
                 if args.use_noise_fbk:
-                    noise = noise_fbk * torch.sin(torch.Tensor([t / 10]))**3 * torch.randn_like(can.state)
+                    if args.clean_period > 0:
+                        noise = noise_fbk * torch.sin(torch.Tensor([t / args.clean_period]))**2 * torch.randn_like(can.state)
+                    else:
+                        noise = noise_fbk * torch.randn_like(can.state)
                     can.state += noise
 
                 yield t, can
@@ -127,6 +140,7 @@ if __name__ == '__main__':
     parser.add_argument('--alphamax', required=False, default='1', type=float)
     parser.add_argument('--noise_fbk_min', required=False, default=None, type=float)
     parser.add_argument('--noise_fbk_max', required=False, default=None, type=float)
+    parser.add_argument('--clean_period', required=False, default=0, type=float)
 
     ## TODO add cli args for specifying type of graph.. for now just random BA graphs
 
