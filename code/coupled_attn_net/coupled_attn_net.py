@@ -1,8 +1,19 @@
 import torch
 import torch.nn.functional as F
-import networkx as nx
 
 from ..utils import inspect, normalize
+
+
+def bmm(x, w):
+    """ assuming x, w: (N, B, C, H, W), perform batch matmul."""
+    x = x.transpose(0, 1)
+    B, N, C, H, W = x.shape
+    x = x.reshape(B, N, -1)
+    return torch.bmm(
+        w.transpose(-1, -2),
+        x
+    ).reshape(B, N, C, H, W).transpose(0, 1)
+
 
 class CAN:
     """
@@ -28,9 +39,13 @@ class CAN:
         C: int,
         H: int,
         W: int,
-        G: nx.DiGraph,
-        clip_min: int = -2,
-        clip_max: int = 2,
+        N: int,
+        wei_idx: int = 0,
+        ker_idx: int = 1,
+        stdout_idx: int = 2,
+        stdin_idx: int = 3,
+        clip_min: float = -1,
+        clip_max: float = 1,
         verbose: bool = False,
     ):
 
@@ -44,34 +59,45 @@ class CAN:
         self.C = C
         self.H = H
         self.W = W
-        self.G = G
-        self.n_nodes = G.number_of_nodes()
+        self.N = N
 
         self.clip_min = clip_min
         self.clip_max = clip_max
 
-        self.state = torch.randn(self.n_nodes, B, C, H, W)
+        ## TODO design decision. (N, B, ...) or (B, N, ...) .. should test
+        ## efficiency after get things up and running..
+        ## or just (B,c, H, W) and dyamically resize into 'n node graph' durring step (not allows more flexible graph structure, not sure if too flexible thought (i.e. is it really possible to maintain a structure in sucb a flexible env?)
+        self.state = torch.randn(N, B, C, H, W)
 
-        # ## TODO do this bit better. at least dont have it fixed and inflexible. think about doing different sized states for wei, ker, c_idx. perhaps an interpolation (graphon like)
-        # self.wei_idx = 0
-        # self.ker_idx = 1
-        # self.C_idx = 2
-        # self.stdout_idx = 3
-        # self.stdin_idx = 4
+        #TODO try having another state and then let them evolve together.. coupled like. each giving differential to each other. but with a slight asymmetry, perhaps can help prevent mode collapse.
 
-    def output(self, node_idx):
+        self.wei_idx = min(wei_idx, N - 1)
+        self.ker_idx = min(ker_idx, N - 1)
+        self.stdout_idx = min(stdout_idx, N - 1)
+        self.stdin_idx = min(stdin_idx, N - 1)
+
+        self.color = (C >= 3)
+
+    def output(self, node_idx=None):
         """ output from self.state[node_idx], ready for matplotlib.
         """
-        if self.C >= 3:
+        if node_idx is None:
+            node_idx = self.stdout_idx
+
+        if self.color:
             out = self.state[node_idx, :, 0:3, :, :] # just use first three color channels for display for now
         else:
-            out = torch.mean(self.state[node_idx], dim=1).unsqueeze(1) # mean across channel dim
+            out = torch.mean(self.state[node_idx], dim=1).unsqueeze(1) # mean across channel dim to get b/w image
         # out.shape = (B, C_out, H, W)
         out = out.detach().cpu().permute(0, 2, 3, 1) # (B, C_out, H, W) -> (B, H, W, C_out)
-        return normalize(out)
+        return normalize(out) # TODO observe that we're doing some normalization here .. think: is this what we want?
 
-    def input(self, inp, node_idx, alpha=1):
+
+    def input(self, inp, node_idx=None, alpha=1):
         """ update state[idx] as a convex combination with inp."""
+        if node_idx is None:
+            node_idx = self.stdin_idx
+
         H, W, C = inp.shape
 
         inp = inp.permute(2, 0, 1).unsqueeze(0) # (H, W, C) -> (1, C, H, W)
@@ -83,6 +109,48 @@ class CAN:
             self.state[node_idx] = alpha * inp  +  (1 - alpha) * self.state[node_idx]
         else:
             raise Exception('TODO have not handled case where self.state has 1 channel and inp has more channels')
+
+
+    def add_noise(self, noise_scale: float, batch_dim: int = None):
+        if batch_dim is None:
+            self.state += noise_scale * torch.randn_like(self.state)
+        else:
+            self.state[batch_dim]
+
+
+    def wei(self):
+        wei = self.state[self.wei_idx] # (B, C, H, W)
+        wei = torch.mean(wei, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)
+        wei = F.interpolate(wei, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)
+        return wei
+
+
+    def ker(self):
+        k = self.state[self.ker_idx] # (B, C, H, W)                                      ## get the node that parameterizes the kernels
+        k = torch.mean(k, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)             ## make into a b/w image
+        k = F.interpolate(k, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
+        k = torch.argmax(k, dim=1) # (B, N, N) -> (B, N)  ## now get indices             ## obtain batched list of indices, N indices per batch
+        state = self.state.transpose(0, 1) # (N, B, ...) -> (B, N, ...)                  ## put batch dim first in state, advanced indexing expects this
+        batch_idxs = torch.arange(self.B).unsqueeze(-1).expand(self.B, self.N) # (B, N)  ## generate batch indices
+        ker = state[batch_idxs, k] # (B, N, H, W, C)                                     ## index into state to get a kernel for each node, for each batch dim
+        ker = ker.transpose(0, 1) # (B, N, ...) -> (N, B, ...)                           ## put node dim first in state (maintain consistency with how the rest of this class is currently implemented with self.state.shape = (N, B, C, H, W)
+        return ker
+
+
+
+
+    def activation(self):
+        """ currently feels fairly unprincipled how i am doing with this activation. curently restricting values to [0, 1], yay its an nd-torus..
+        """
+        self.state = torch.frac(1 + torch.frac(self.state))
+        # self.state = torch.tanh(self.state)
+        # self.state = torch.frac(self.state)
+        # self.state = torch.clip(self.state, self.clip_min, self.clip_max)
+        # self.state = normalize(self.state) ## uninteresting results with this approach it looks like
+        # self.state = self.state / torch.linalg.norm(self.state, dim=TODO) ## try this .. feels like this could be a good approach, and amenable having self.state.dtype = torch.complex
+                                                                            ## TODO figure out exaclty what batch norm and layer norm are doing .. seems like these are methods that achieve a similar goal and have had success .. idk batch norm required different behavior for train time and test time, so dont like that ..
+                                                                            ## layer norm seems better.. in the paper they mention that it is an approach that works for rnns ..
+        # observe normalization should make a bit more sense when think of complex valued state ..
 
 
     def step(self, alpha=0.01):
@@ -100,139 +168,33 @@ class CAN:
             if self.verbose:
                 print(*args)
 
-        ## TODO come up with a principled way of doing this.. 
+        ## TODO come up with a principled way of doing the step ..
         ## TODO think about doing some learned linear transformations, i.e. with mha or something..
+
         dxdt = torch.zeros_like(self.state)
-        for u, v in self.G.edges:
-            dxdt[v] += F.scaled_dot_product_attention(
-                self.state[v],
-                self.state[v],
-                self.state[u].permute(0, 1, 3, 2)
-            )
+
+        wei = self.wei() # (B, N, N)
+        ker = self.ker() # (N, B, C, H, W)
+
+        # # TODO observe that here there is no communication across channels .. i.e. C is treated as just another batch dim here ..
+        # sk = self.state @ ker.transpose(-2, -1)
+
+        # attn
+        sk = F.scaled_dot_product_attention(
+            self.state.reshape(self.N, self.B, -1).transpose(0, 1),
+            ker.reshape(self.N, self.B, -1).transpose(0, 1),
+            ker.reshape(self.N, self.B, -1).transpose(0, 1),
+        ).transpose(0, 1).reshape(self.N, self.B, self.C, self.H, self.W)
+
+        dxdt = sk
+        # # batch matmul, flowing sk along adjacency structure given by wei
+        # dxdt = bmm(sk, wei)
+
         self.state += alpha * dxdt
 
 
-        self.state = torch.clip(self.state, self.clip_min, self.clip_max)
-        # self.state = torch.frac(self.state)
-        # self.state = normalize(self.state)
 
 
+        self.activation()
 
-
-
-
-
-
-
-
-
-
-
-    ## def wei(self, i, j):
-    ##     """ Return the weight of the edge (i -> j)
-
-    ##         have 0 <= i, j <= n_nodes
-
-    ##         assume n_nodes <= n**k
-
-    ##         then can very simply just read from the top left
-    ##         [:n_nodes, :n_nodes] submatrix.
-    ##     """
-    ##     W = self.nodes[self.wei_idx]
-    ##     return torch.mean(W[:, i, j]) # average over channel dim
-
-
-    ## def ker(self, b, i, j):
-    ##     """ Return the kernel associated with the edge (i -> j)
-    ##         Hence we need an index 0 <= idx <= n_nodes.
-
-    ##         assume n_nodes**2 <= n**k
-
-    ##         we are looking for the adjacency matrix of a matching in a
-    ##         bipartite graph between edges and nodes then just need (n_nodes**2,
-    ##         n_nodes) 0-1 matrix with all rows summing to 1.
-
-    ##         then:
-    ##     """
-    ##     K = self.nodes[self.ker_idx]
-    ##     K = K[b] # index into batch dim
-    ##     K = torch.mean(K, dim=-1) # average over channel dim
-    ##     K = K[0:self.n_nodes**2, 0:self.n_nodes]
-    ##     K = torch.argmax(K, dim=-1)
-    ##     K = K.reshape(self.n_nodes, self.n_nodes)
-    ##     return self.nodes[K[i, j]][b]
-
-
-    ## def C(self, i, j):
-    ##     """ same procedure as for above """
-    ##     _C = self.nodes[self.C_idx]
-    ##     _C = _C[b] # index into batch dim
-    ##     _C = torch.mean(_C, dim=-1) # average over channel dim
-    ##     _C = torch.argmax(_C[0:self.n_nodes**2, 0:self.n_nodes], dim=-1).reshape(self.n_nodes, self.n_nodes)
-    ##     return self.nodes[_C[i, j]]
-
-
-
-# def ceinsum(X, Y, C, color, verbose=False) -> np.ndarray:
-#     """ Return einsum of X and some subtensor of Y, with all indices
-#         'read' from C.
-# 
-#         X, ker are ndarrays with n = X.shape[i] = X.shape[j] = ker.shape[k] for all valid i,j,k.
-#         C is a 2d array.
-# 
-#     """
-#     def p(*args):
-#         if verbose:
-#             print(*args)
-# 
-#     n = X.shape[0]
-# 
-#     if color: # design decision. just averaging color channels of C.
-#         C = np.mean(C, axis=-1)
-# 
-#     xnd = len(X.shape)
-#     ynd = len(Y.shape)
-# 
-#     p('x.s', X.shape, 'xnd', xnd)
-#     p('y.s', Y.shape, 'ynd', ynd)
-#     p('c.s', C.shape)
-# 
-#     ch = C.shape[0]
-#     n_samples = 5
-#     sh = ch // n_samples # sampling height
-# 
-#     p('sh', sh)
-# 
-#     px = np.argsort(np.sum(C[0*sh:1*sh, 0:xnd], axis=0)) # X perm
-#     po = np.argsort(np.sum(C[1*sh:2*sh, 0:xnd], axis=0)) # out perm
-#     py = np.argsort(np.sum(C[2*sh:3*sh, 0:ynd], axis=0)) # Y perm
-# 
-#     p('px.s', px.shape)
-#     p('po.s', po.shape)
-#     p('py.s', py.shape)
-# 
-#     knd = np.argmax(np.sum(C[2*sh:3*sh, 0:ynd-2])) + 2 # number of kernel dimensions
-#     nki = ynd - knd # number of kernel indices
-# 
-#     pk = np.argsort(np.sum(C[3*sh:4*sh, 0:knd], axis=0)) # kernel perm
-# 
-#     ki = tuple(np.argmax(C[4*sh:4*sh+n, 0:nki], axis=0)) # kernel indices
-#     
-#     p('knd', knd)
-#     p('nki', nki)
-#     p('ki', ki)
-#     p('pk.s', pk)
-# 
-#     ker = Y.transpose(*py)
-# 
-#     p('ker1.s', ker.shape)
-#     ker = ker[ki]
-#     p('ker.s', ker.shape)
-# 
-#     out = np.einsum(X, px, ker, pk, po)
-# 
-#     p('out.s', out.shape)
-#     p()
-# 
-#     return out
 
