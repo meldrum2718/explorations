@@ -1,6 +1,7 @@
 import torch
 
 from .coupled_attn_net import CAN
+from ..utils import inspect
 
 
 def test_batch_dim_independence(
@@ -10,7 +11,7 @@ def test_batch_dim_independence(
     W = 32,
     N = 9,
     n_steps = 10,
-    test_batches = [0, 3],
+    test_batches = [2, 6, 2]
 ):
     can = CAN(
         B = B,
@@ -21,7 +22,7 @@ def test_batch_dim_independence(
     )
 
     can2 = CAN(
-        B = 2,
+        B = len(test_batches),
         C = C,
         H = H,
         W = W,
@@ -39,7 +40,7 @@ def test_batch_dim_independence(
             )
         )
         assert batch_dim_indep, 'Non independence detected across batch dim'
-    print('Passed batch dim independence')
+    print('Passed batch dim independence test!')
 
 
 

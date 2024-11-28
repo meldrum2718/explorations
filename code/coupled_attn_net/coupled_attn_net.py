@@ -15,6 +15,10 @@ def bmm(x, w):
     ).reshape(B, N, C, H, W).transpose(0, 1)
 
 
+#TODO try having another state and then let them evolve together.. coupled
+## like. each giving differential to each other. but with a slight asymmetry,
+## perhaps can help prevent mode collapse. think maxwells eqns
+
 class CAN:
     """
     A graph where the nodes are images, and the edges are attention
@@ -26,12 +30,20 @@ class CAN:
             the second. i suppose included in the network topology is not only
             the edges, but the edge weights, which key, query, and value they
             use
+                    .. oohhh can really just use a single controller node, and use
+                    different channels in it to read off the kernel and the
+                    weight matrix.. i suppose this requires channels > 1 .. 
         how to parameterize the step size. presumably want the step size to be
         different in different parts of the network. there is some chance that
         simply a difference in ordero of magnitude of the states will provide
         this difference in inertia that we are looking for, but i kinda feel
         like it could be better to explicitly give the model the ability to condition their ideas 
 
+        i suppose need to ensure there is mixing across the channel dim.. i
+        suppose one way of testing this would be trying to reconstruct a red
+        b/w image as a blue b/w image!
+
+        
     """
     def __init__(
         self,
@@ -66,10 +78,10 @@ class CAN:
 
         ## TODO design decision. (N, B, ...) or (B, N, ...) .. should test
         ## efficiency after get things up and running..
-        ## or just (B,c, H, W) and dyamically resize into 'n node graph' durring step (not allows more flexible graph structure, not sure if too flexible thought (i.e. is it really possible to maintain a structure in sucb a flexible env?)
+        ## or just (B, C, H, W) and dyamically resize into 'n node graph' durring step (not allows more flexible graph structure, not sure if too flexible thought (i.e. is it really possible to maintain a structure in sucb a flexible env?)
         self.state = torch.randn(N, B, C, H, W)
 
-        #TODO try having another state and then let them evolve together.. coupled like. each giving differential to each other. but with a slight asymmetry, perhaps can help prevent mode collapse.
+        self.losses = torch.zeros(B)
 
         self.wei_idx = min(wei_idx, N - 1)
         self.ker_idx = min(ker_idx, N - 1)
@@ -93,7 +105,7 @@ class CAN:
         return normalize(out) # TODO observe that we're doing some normalization here .. think: is this what we want?
 
 
-    def input(self, inp, node_idx=None, alpha=1):
+    def input(self, inp, node_idx=None, alpha=1, ga_eval=False):
         """ update state[idx] as a convex combination with inp."""
         if node_idx is None:
             node_idx = self.stdin_idx
@@ -111,11 +123,59 @@ class CAN:
             raise Exception('TODO have not handled case where self.state has 1 channel and inp has more channels')
 
 
+        if ga_eval:
+            # evaluate eatch batch (in ga language: compute fitness of the various candidate solutions)
+            with torch.no_grad():
+                preds = self.output(self.stdout_idx)
+                loss = F.mse_loss(preds, inp.expand(*preds.shape), reduction='none') # elementwise mse loss
+                loss = loss.mean(dim=list(range(1, len(loss.shape)))) # average all but batch dim
+                self.losses += loss#.detach()
+
+
     def add_noise(self, noise_scale: float, batch_dim: int = None):
         if batch_dim is None:
             self.state += noise_scale * torch.randn_like(self.state)
         else:
             self.state[batch_dim]
+
+    def ga_step(self, k, max_noise_scale):
+        """ Run a genetic algorithm step.
+            This looks like:
+                -sort batches by prediction error
+                -select top-k
+                -copy them along the batch dimension (i.e. have k divides B,
+                    and populate batch dim with k * (B//k) copies of the topk)
+                -TODO include some random sampling. for right now just going to
+                    do determinsitc, but really we want to be sampling from some
+                    distribution like a poisson or something.
+                -reset losses (TODO might not want to do this, but rather have
+                    some sort of running average or something, i mean we really do
+                    want to eventually be capturing long horizon dynamics..)
+
+        """
+        N, B, C, H, W = self.state.shape
+
+        assert (self.B % k) == 0, 'k must divide B currently, for simplicity of implementation'
+        ranking = torch.argsort(self.losses)
+        inspect('ranking', ranking)
+        keepers = self.state[:, ranking[:k]]
+        inspect('keepers', keepers)
+        inspect('self.state', self.state)
+        keepers = keepers.repeat(1, self.B // k, 1, 1, 1)
+        noise_scale = torch.linspace(0, 1, B // k).reshape(-1, 1).expand(B // k, k).reshape(-1)
+        noise_scale = noise_scale * max_noise_scale
+        noise = torch.randn(*self.state.shape)
+
+        ##TODO display histogram of self.losses .. its shape should say something about the learning process thats taking place ..
+
+        if torch.all(self.state[:, ranking[0]] == keepers[:, 0]):
+            print('ok, they appear to match')
+        else:
+            raise Exception('should match')
+
+        self.state = keepers + noise
+
+        self.losses = torch.zeros_like(self.losses) # reset losses. TODO think- do we want some sort of moving average, or some other way of keeping track of expectation over time .. this is a question for an RL expert.
 
 
     def wei(self):
@@ -139,6 +199,7 @@ class CAN:
 
 
 
+    ## TODO pass in which activation we're using in command line args. will be better for methodical develepoment .. and repeataable experimentation
     def activation(self):
         """ currently feels fairly unprincipled how i am doing with this activation. curently restricting values to [0, 1], yay its an nd-torus..
         """
@@ -187,8 +248,8 @@ class CAN:
         ).transpose(0, 1).reshape(self.N, self.B, self.C, self.H, self.W)
 
         dxdt = sk
-        # # batch matmul, flowing sk along adjacency structure given by wei
-        # dxdt = bmm(sk, wei)
+        ## TODO pass in a hyperparam whether or not to use wei ..
+        # dxdt += bmm(sk, wei) # flow sk along adjacency structure given by wei .. currently untrained, but seems like uncommenting this line gives somewhat less interesting behavior. of course, really should implement the ga first and then make judgements about expressivity after a bit of selection
 
         self.state += alpha * dxdt
 
