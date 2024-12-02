@@ -11,8 +11,6 @@ from matplotlib.widgets import Slider
 from .coupled_attn_net import CAN
 from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid, inspect, plot
 
-
-
 ## TODO wrt all the hyperparams particularly reln between step size and noise
 ## scales, i feel like there is a 'right' way of doing this, requires doing
 ## some math about convergence of dyn.sys i expect..
@@ -21,6 +19,23 @@ from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims
 ## outer optimization over the graphs
 ## ## inner optimization over a batch dimenstion, stochastic perturbations of
 #     the state ya know.. genetic algorithm like..
+
+## really might be interesting to sometimes work with discrete graphs, sometimes with these continuous ones.
+## i suppose one way of doing this is overwriting can.state[can.wei_idx]
+## at each step. really could be interesting to describe conv nets and the
+## like in this language. should be very feasible. just need wei to have no
+## edges going into it, so it doesnt change, and also have some conv kernels
+## that also are fixed (having already been trained). ok, now thinking,
+## there was something really nice about the rtn implementation with ceinsum
+## operation that it was very flexible. ceinsum can represent a mat mul or
+## a strided convolution. we like this.. i suppose we can sort of recover this
+## by thinking of a sequence of mat muls (i.e. some matmuls for permuting,
+## and then obviosly convolution is a linear operation that can be implemented
+## as a matmul, just less efficiently than an einsum or a nn.conv2d, but
+## still, the ease of adding a batch dim in this new impl seems sufficiently
+## powerful so as to warrant this tradeoff)
+
+
 
 def main(args):
     for k, v in vars(args).items():
@@ -69,9 +84,10 @@ def main(args):
             axs[can.stdin_idx].set_title('Inp')
             axs[can.stdout_idx].set_title('Out')
 
-            cmap = None if (args.channels >= 3)else 'grey'
+            cmap = None if (args.channels >= 3) else 'grey'
 
             ims = [axs[i].imshow(can.output(i)[0], cmap=cmap) for i in range(can.N)] # indexing into just first batch dim [0]
+            # ims = [axs[i].imshow(torch.mean(can.output(i), dim=0), cmap=cmap) for i in range(can.N)]
 
             alpha = 0
             noise_scale = 0
@@ -96,6 +112,8 @@ def main(args):
                         inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
                         inp = cv2.resize(inp, (args.width, args.height), interpolation = cv2.INTER_AREA) / 255.0
                         inp = torch.Tensor(inp) # (H, W, C)
+                        if args.channels < 3:
+                            inp = inp.mean(dim=-1).unsqueeze(-1)
 
                         can.input(inp, node_idx=None, ga_eval=args.use_ga)
 
@@ -206,26 +224,11 @@ if __name__ == '__main__':
 
 
 
-
     ## TODO
     ## parser.add_argument('--activation')
     ## parser.add_argument('--step_implementation')
 
 
-    ## really might be interesting to sometimes work with discrete graphs, sometimes with these continuous ones.
-    ## i suppose one way of doing this is overwriting can.state[can.wei_idx]
-    ## at each step. really could be interesting to describe conv nets and the
-    ## like in this language. should be very feasible. just need wei to have no
-    ## edges going into it, so it doesnt change, and also have some conv kernels
-    ## that also are fixed (having already been trained). ok, now thinking,
-    ## there was something really nice about the rtn implementation with ceinsum
-    ## operation that it was very flexible. ceinsum can represent a mat mul or
-    ## a strided convolution. we like this.. i suppose we can sort of recover this
-    ## by thinking of a sequence of mat muls (i.e. some matmuls for permuting,
-    ## and then obviosly convolution is a linear operation that can be implemented
-    ## as a matmul, just less efficiently than an einsum or a nn.conv2d, but
-    ## still, the ease of adding a batch dim in this new impl seems sufficiently
-    ## powerful so as to warrant this tradeoff)
 
     args = parser.parse_args()
 

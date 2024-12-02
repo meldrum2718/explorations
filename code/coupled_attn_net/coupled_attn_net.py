@@ -184,7 +184,8 @@ class CAN:
     def ker(self):
         k = self.state[self.ker_idx] # (B, C, H, W)                                      ## get the node that parameterizes the kernels
         k = torch.mean(k, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)             ## make into a b/w image
-        k = F.interpolate(k, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
+        # k = F.interpolate(k, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
+        k = F.interpolate(k, size=(self.N, self.N), mode='bilinear', antialias=True).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
         k = torch.argmax(k, dim=1) # (B, N, N) -> (B, N)  ## now get indices             ## obtain batched list of indices, N indices per batch
         state = self.state.transpose(0, 1) # (N, B, ...) -> (B, N, ...)                  ## put batch dim first in state, advanced indexing expects this
         batch_idxs = torch.arange(self.B).unsqueeze(-1).expand(self.B, self.N) # (B, N)  ## generate batch indices
@@ -194,7 +195,7 @@ class CAN:
 
 
     def proj_to_torus(self):
-        self.state = torch.frac(self.state)
+        self.state = torch.frac(1 + torch.frac(self.state))
 
 
 
