@@ -133,8 +133,7 @@ class CAN:
             inp = torch.mean(inp, dim=1) # (1, C, H, W) -> (1, 1, H, W)
             self.state[node_idx] = alpha * inp  +  (1 - alpha) * self.state[node_idx]
         else:
-            raise Exception('TODO have not handled case where self.state has 1 channel and inp has more channels')
-
+            raise Exception('TODO have not handled case where (self.C != 1) and (C > self.C)')
 
 
     def add_noise(self, noise_scale: float, batch_dim: int = None):
@@ -162,25 +161,17 @@ class CAN:
 
         assert (self.B % k) == 0, 'k must divide B currently, for simplicity of implementation'
         ranking = torch.argsort(self.losses)
-        inspect('ranking', ranking)
         keepers = self.state[:, ranking[:k]]
-        inspect('keepers', keepers)
-        inspect('self.state', self.state)
         keepers = keepers.repeat(1, self.B // k, 1, 1, 1)
-        noise_scale = torch.linspace(0, 1, B // k).reshape(-1, 1).expand(B // k, k).reshape(-1)
-        noise_scale = noise_scale * max_noise_scale
-        noise = torch.randn(*self.state.shape)
 
-        ##TODO display histogram of self.losses .. its shape should say something about the learning process thats taking place ..
+        noise_scale = torch.linspace(0, max_noise_scale, self.B // k).reshape(-1, 1)
+        noise_scale = noise_scale.expand(self.B // k, k).reshape(1, self.B, 1, 1, 1)
 
-        if torch.all(self.state[:, ranking[0]] == keepers[:, 0]):
-            print('ok, they appear to match')
-        else:
-            raise Exception('should match')
+        noise = torch.randn_like(self.state) * noise_scale
 
         self.state = keepers + noise
 
-        self.losses = torch.zeros_like(self.losses) # reset losses. TODO think- do we want some sort of moving average, or some other way of keeping track of expectation over time .. this is a question for an RL expert.
+        self.losses = torch.zeros_like(self.losses) # reset losses. TODO think: do we want some sort of moving average, or some other way of keeping track of expectation over time .. this is probably a question to be answered with some thinking from RL ..
 
 
     def wei(self):
