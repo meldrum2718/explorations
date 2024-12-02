@@ -23,14 +23,16 @@ from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims
 #     the state ya know.. genetic algorithm like..
 
 def main(args):
-    with torch.no_grad():
+    for k, v in vars(args).items():
+        print(k, v)
+
+    with torch.no_grad(): ## TODO placement of this ?
+
         cap = None
-        print(args)
         try:
 
             if args.video_input:
                 cap = get_video_capture()
-
 
             # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
             #
@@ -46,7 +48,6 @@ def main(args):
             ## ## # G = nx.random_geometric_graph(args.n_nodes, 0.2) ## TODO design decision
             ## ## G = nx.DiGraph(G)
             ## ## plot(G)
-
 
             can = CAN(
                 B = args.batch_dim,
@@ -85,30 +86,20 @@ def main(args):
                 nonlocal ga_topk
                 nonlocal ga_noise_scale
 
-                print('alpha', alpha)
-                print('noise_scale', noise_scale)
-                print('ga_sel_period', ga_sel_period)
-                print('ga_topk', ga_topk)
-                print('ga_noise_scale', ga_noise_scale)
-
-
                 t = 0
                 while True:
                     t += 1
                     inp = None
-                    if (args.sample_period is not None) and (t % args.sample_period == 0) and (cap is not None):
+                    if args.video_input and (t % args.sample_period) == 0:
                         _, inp = cap.read()
                         # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
                         inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
                         inp = cv2.resize(inp, (args.width, args.height), interpolation = cv2.INTER_AREA) / 255.0
                         inp = torch.Tensor(inp) # (H, W, C)
-                        # if not args.color:
-                        #     inp = inp
-                        #     inp = torch.mean(inp, dim=0).unsqueeze(0)
-                        # assert np.all(inp.shape == can.output().shape), f'inp shape: {inp.shape},   can.out.shape: {can.output().shape}'
 
-                    if inp is not None:
                         can.input(inp, node_idx=None, ga_eval=args.use_ga)
+
+                        ## deprecated .. # if not args.color: inp = inp inp = torch.mean(inp, dim=0).unsqueeze(0) assert np.all(inp.shape == can.output().shape), f'inp shape: {inp.shape},   can.out.shape: {can.output().shape}'
 
                     if args.use_ga and (t % ga_sel_period) == 0:
                         can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
@@ -199,7 +190,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_max', '-cma', default=2, type=float)
 
     parser.add_argument('--video_input', action='store_true')
-    parser.add_argument('--sample_period', '-sp', default=None, type=int)
+    parser.add_argument('--sample_period', '-sp', default=1, type=int)
     parser.add_argument('--clean_period', required=False, default=0, type=float)
 
     parser.add_argument('--alphamin', required=False, default='0', type=float)
@@ -244,10 +235,6 @@ if __name__ == '__main__':
     #  args.clean_period. the 'correct' way of doing this (i expect) is just
     #  having one. for now ignoring this though .. basically just forgot about sample period, hmm,  haha maybe want sample period to be controlled by some part of the state!
     ## TODO deal with this when implementing ga batch sel
-    if args.sample_period:
-        args.video_input = True
-    if args.video_input:
-        args.sample_period = args.sample_period or 1
 
     assert args.ga_sel_period > 0, 'ga selection period must be positive'
 

@@ -54,8 +54,8 @@ class CAN:
         N: int,
         wei_idx: int = 0,
         ker_idx: int = 1,
-        stdout_idx: int = 2,
-        stdin_idx: int = 3,
+        stdin_idx: int = 2,
+        stdout_idx: int = 3,
         clip_min: float = -1,
         clip_max: float = 1,
         verbose: bool = False,
@@ -79,7 +79,8 @@ class CAN:
         ## TODO design decision. (N, B, ...) or (B, N, ...) .. should test
         ## efficiency after get things up and running..
         ## or just (B, C, H, W) and dyamically resize into 'n node graph' durring step (not allows more flexible graph structure, not sure if too flexible thought (i.e. is it really possible to maintain a structure in sucb a flexible env?)
-        self.state = torch.randn(N, B, C, H, W)
+        self.state = torch.frac(torch.randn(N, B, C, H, W))
+        ## TODO try other initializations like uniform
 
         self.losses = torch.zeros(B)
 
@@ -102,7 +103,9 @@ class CAN:
             out = torch.mean(self.state[node_idx], dim=1).unsqueeze(1) # mean across channel dim to get b/w image
         # out.shape = (B, C_out, H, W)
         out = out.detach().cpu().permute(0, 2, 3, 1) # (B, C_out, H, W) -> (B, H, W, C_out)
-        return normalize(out) # TODO observe that we're doing some normalization here .. think: is this what we want?
+
+        return torch.frac(1 + out) # pass to [0, 1] pixel values
+        # return normalize(out) # TODO observe that we're doing some normalization here .. think: is this what we want?
 
 
     def input(self, inp, node_idx=None, alpha=1, ga_eval=False):
@@ -112,7 +115,17 @@ class CAN:
 
         H, W, C = inp.shape
 
-        inp = inp.permute(2, 0, 1).unsqueeze(0) # (H, W, C) -> (1, C, H, W)
+        inp = inp.unsqueeze(0) # (H, W, C) -> (1, H, W, C)
+
+        if ga_eval:
+            # evaluate each batch (in ga language: compute the fitness of the various candidate solutions)
+            with torch.no_grad():
+                preds = self.output(self.stdout_idx)
+                loss = F.mse_loss(preds, inp.expand(*preds.shape), reduction='none') # elementwise mse loss
+                loss = loss.mean(dim=list(range(1, len(loss.shape)))) # average all but batch dim
+                self.losses += loss#.detach()
+
+        inp = inp.permute(0, 3, 1, 2) # (1, H, W, C) -> (1, C, H, W)
 
         if self.C >= C: # if more channels in self.state than in inp
             self.state[node_idx][:, 0:C, :, :] = alpha * inp  +  (1 - alpha) * self.state[node_idx][:, 0:C, :, :]
@@ -122,14 +135,6 @@ class CAN:
         else:
             raise Exception('TODO have not handled case where self.state has 1 channel and inp has more channels')
 
-
-        if ga_eval:
-            # evaluate eatch batch (in ga language: compute fitness of the various candidate solutions)
-            with torch.no_grad():
-                preds = self.output(self.stdout_idx)
-                loss = F.mse_loss(preds, inp.expand(*preds.shape), reduction='none') # elementwise mse loss
-                loss = loss.mean(dim=list(range(1, len(loss.shape)))) # average all but batch dim
-                self.losses += loss#.detach()
 
 
     def add_noise(self, noise_scale: float, batch_dim: int = None):
@@ -197,21 +202,10 @@ class CAN:
         return ker
 
 
+    def proj_to_torus(self):
+        self.state = torch.frac(self.state)
 
 
-    ## TODO pass in which activation we're using in command line args. will be better for methodical develepoment .. and repeataable experimentation
-    def activation(self):
-        """ currently feels fairly unprincipled how i am doing with this activation. curently restricting values to [0, 1], yay its an nd-torus..
-        """
-        self.state = torch.frac(1 + torch.frac(self.state))
-        # self.state = torch.tanh(self.state)
-        # self.state = torch.frac(self.state)
-        # self.state = torch.clip(self.state, self.clip_min, self.clip_max)
-        # self.state = normalize(self.state) ## uninteresting results with this approach it looks like
-        # self.state = self.state / torch.linalg.norm(self.state, dim=TODO) ## try this .. feels like this could be a good approach, and amenable having self.state.dtype = torch.complex
-                                                                            ## TODO figure out exaclty what batch norm and layer norm are doing .. seems like these are methods that achieve a similar goal and have had success .. idk batch norm required different behavior for train time and test time, so dont like that ..
-                                                                            ## layer norm seems better.. in the paper they mention that it is an approach that works for rnns ..
-        # observe normalization should make a bit more sense when think of complex valued state ..
 
 
     def step(self, alpha=0.01):
@@ -253,9 +247,25 @@ class CAN:
 
         self.state += alpha * dxdt
 
+        # self.activation()
+        self.proj_to_torus()
 
 
 
-        self.activation()
 
 
+    ## deprecated
+
+    ## ## TODO pass in which activation we're using in command line args. will be better for methodical develepoment .. and repeataable experimentation
+    ## def activation(self):
+    ##     """ currently feels fairly unprincipled how i am doing with this activation. curently restricting values to [0, 1], yay its an nd-torus..
+    ##     """
+    ##     # self.state = torch.frac(self.state)
+    ##     # self.state = torch.frac(1 + torch.frac(self.state))
+    ##     self.state = torch.tanh(self.state)
+    ##     # self.state = torch.clip(self.state, self.clip_min, self.clip_max)
+    ##     # self.state = normalize(self.state) ## uninteresting results with this approach it looks like
+    ##     # self.state = self.state / torch.linalg.norm(self.state, dim=TODO) ## try this .. feels like this could be a good approach, and amenable having self.state.dtype = torch.complex
+    ##                                                                         ## TODO figure out exaclty what batch norm and layer norm are doing .. seems like these are methods that achieve a similar goal and have had success .. idk batch norm required different behavior for train time and test time, so dont like that ..
+    ##                                                                         ## layer norm seems better.. in the paper they mention that it is an approach that works for rnns ..
+    ##     # observe normalization should make a bit more sense when think of complex valued state ..
