@@ -72,6 +72,7 @@ def main(args):
                 N = args.n_nodes,
                 clip_min=args.clip_min,
                 clip_max=args.clip_max,
+                use_complex=args.complex,
             )
 
             axh, axw = get_appropriate_dims_for_ax_grid(can.N)
@@ -122,8 +123,8 @@ def main(args):
                     if args.use_ga and (t % ga_sel_period) == 0:
                         can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
 
-                    ns = noise_scale
                     step_size = alpha
+                    ns = step_size * noise_scale
 
                     if args.use_noise_fbk:
 
@@ -131,11 +132,6 @@ def main(args):
                             t_osscil = torch.sin(torch.Tensor([t / args.clean_period])) ** 2 # time param for interpolation between diffeq step and noising process
                             t_osscil = t_osscil.item()
                             ns *= t_osscil
-
-                            ## TODO note this is some fairly arbitrary way of varying step size, be rigorous
-                            ## TODO look at how we did this sort of thing in ddpm,
-                            ##      look how we do this sort of thing in rectified flow.
-                            step_size *= (1 - t_osscil)
 
                         can.add_noise(ns)
 
@@ -208,6 +204,9 @@ if __name__ == '__main__':
     parser.add_argument('--clip_max', '-cma', default=2, type=float)
 
     parser.add_argument('--video_input', action='store_true')
+
+    parser.add_argument('--complex', action='store_true')
+
     parser.add_argument('--sample_period', '-sp', default=1, type=int)
     parser.add_argument('--clean_period', required=False, default=0, type=float)
 
@@ -221,6 +220,7 @@ if __name__ == '__main__':
     parser.add_argument('--ga_sel_period', required=False, default=10, type=int)
     parser.add_argument('--ga_noise_scale', required=False, default=1, type=float)
     parser.add_argument('--ga_topk', required=False, default=1, type=int)
+
 
 
 
@@ -242,8 +242,6 @@ if __name__ == '__main__':
     assert args.ga_sel_period > 0, 'ga selection period must be positive'
 
     args.use_noise_fbk = (None not in [args.noise_fbk_min, args.noise_fbk_max])
-
-
 
 
     main(args)

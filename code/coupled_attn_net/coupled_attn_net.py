@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn.functional as F
 
@@ -13,6 +14,44 @@ def bmm(x, w):
         w.transpose(-1, -2),
         x
     ).reshape(B, N, C, H, W).transpose(0, 1)
+
+
+
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, dtype=query.dtype)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias += attn_mask
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_weight = torch.softmax(attn_weight.abs(), dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True).to(value.dtype)
+    return attn_weight @ value
+
+
+
+
+
+
+
+
+
 
 
 #TODO try having another state and then let them evolve together.. coupled
@@ -56,6 +95,7 @@ class CAN:
         ker_idx: int = 1,
         stdin_idx: int = 2,
         stdout_idx: int = 3,
+        use_complex: bool = True,
         clip_min: float = -1,
         clip_max: float = 1,
         verbose: bool = False,
@@ -76,11 +116,16 @@ class CAN:
         self.clip_min = clip_min
         self.clip_max = clip_max
 
-        ## TODO design decision. (N, B, ...) or (B, N, ...) .. should test
-        ## efficiency after get things up and running..
-        ## or just (B, C, H, W) and dyamically resize into 'n node graph' durring step (not allows more flexible graph structure, not sure if too flexible thought (i.e. is it really possible to maintain a structure in sucb a flexible env?)
-        self.state = torch.frac(torch.randn(N, B, C, H, W))
-        ## TODO try other initializations like uniform
+
+
+        self.rand = torch.randn ## TODO check what happens if we use uniform (torch.rand) instead of normal. is there any qualitative difference? what about other initializations?
+
+        self.complex = use_complex
+        self.dtype = torch.cfloat if self.complex else torch.float
+
+        ## TODO test which mem layout is more efficient: (N, B, ...) or (B, N, ...). for now using (N, B, ...) for ease of indexing into specific nodes..
+        self.state = self.rand(N, B, C, H, W, dtype=self.dtype)
+        self.proj_to_torus()
 
         self.losses = torch.zeros(B)
 
@@ -104,8 +149,10 @@ class CAN:
         # out.shape = (B, C_out, H, W)
         out = out.detach().cpu().permute(0, 2, 3, 1) # (B, C_out, H, W) -> (B, H, W, C_out)
 
-        return torch.frac(1 + out) # pass to [0, 1] pixel values
-        # return normalize(out) # TODO observe that we're doing some normalization here .. think: is this what we want?
+        out = out.real.abs() ## take the absolute value of the real part of out
+        ## out = torch.frac(1 + out) # pass to [0, 1] pixel values .. new impl should already have pixel values in [0, 1]
+
+        return out
 
 
     def input(self, inp, node_idx=None, alpha=1, ga_eval=False):
@@ -123,7 +170,7 @@ class CAN:
                 preds = self.output(self.stdout_idx)
                 loss = F.mse_loss(preds, inp.expand(*preds.shape), reduction='none') # elementwise mse loss
                 loss = loss.mean(dim=list(range(1, len(loss.shape)))) # average all but batch dim
-                self.losses += loss#.detach()
+                self.losses += loss
 
         inp = inp.permute(0, 3, 1, 2) # (1, H, W, C) -> (1, C, H, W)
 
@@ -137,10 +184,8 @@ class CAN:
 
 
     def add_noise(self, noise_scale: float, batch_dim: int = None):
-        if batch_dim is None:
-            self.state += noise_scale * torch.randn_like(self.state)
-        else:
-            self.state[batch_dim]
+        self.state += noise_scale * torch.randn_like(self.state)
+        self.proj_to_torus()
 
     def ga_step(self, k, max_noise_scale):
         """ Run a genetic algorithm step.
@@ -176,13 +221,21 @@ class CAN:
 
     def wei(self):
         wei = self.state[self.wei_idx] # (B, C, H, W)
+        ## if self.complex: wei = wei.real # just take the real part
         wei = torch.mean(wei, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)
-        wei = F.interpolate(wei, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)
+        if self.complex:
+            wei = torch.complex(
+                F.interpolate(wei.real, size=(self.N, self.N)).squeeze(1), # (B, H, W) -> (B, N, N)
+                F.interpolate(wei.imag, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)
+            )
+        else:
+            wei = F.interpolate(wei, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)
         return wei
 
 
     def ker(self):
         k = self.state[self.ker_idx] # (B, C, H, W)                                      ## get the node that parameterizes the kernels
+        if self.complex: k = k.real
         k = torch.mean(k, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)             ## make into a b/w image
         # k = F.interpolate(k, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
         k = F.interpolate(k, size=(self.N, self.N), mode='bilinear', antialias=True).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
@@ -195,9 +248,13 @@ class CAN:
 
 
     def proj_to_torus(self):
-        self.state = torch.frac(1 + torch.frac(self.state))
+        if self.complex:
+            ## self.state = self.state / (self.state.abs() + 1e-9) # only care about the phase angle of each coordinate
+            self.state = torch.complex(torch.frac(self.state.real), torch.frac(self.state.imag)) ## or other parameterization of a complex torus ## TODO experiment with these two different projections onto a complex tori
 
-
+        else:
+            # some kinda hacky coersion of a real tensor to [0, 1]^self.state.numel -- hacky since multiplication really doesnt play nice with this projection (observe $(1+a)*b = ab + b \neq ab$ (mod 1)) (i.e. this map onto the torus is not a homomorphism for real multiplication .. or something like that!)
+            self.state = torch.frac(1 + torch.frac(self.state))
 
 
     def step(self, alpha=0.01):
@@ -227,10 +284,10 @@ class CAN:
         # sk = self.state @ ker.transpose(-2, -1)
 
         # attn
-        sk = F.scaled_dot_product_attention(
-            self.state.reshape(self.N, self.B, -1).transpose(0, 1),
-            ker.reshape(self.N, self.B, -1).transpose(0, 1),
-            ker.reshape(self.N, self.B, -1).transpose(0, 1),
+        sk = scaled_dot_product_attention(
+            query=self.state.reshape(self.N, self.B, -1).transpose(0, 1),
+            key=ker.reshape(self.N, self.B, -1).transpose(0, 1),
+            value=ker.reshape(self.N, self.B, -1).transpose(0, 1),
         ).transpose(0, 1).reshape(self.N, self.B, self.C, self.H, self.W)
 
         dxdt = sk
