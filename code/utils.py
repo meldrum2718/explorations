@@ -67,10 +67,10 @@ def inspect(label, im):
     print(label + ':')
     print('shape:', im.shape)
     print('dtype:', im.dtype)
-    print('min:', im.min())
-    print('max:', im.max())
 
     try:
+        print('min:', im.min())
+        print('max:', im.max())
         print('mean:', im.mean())
         print('std:', im.std())
     except:
