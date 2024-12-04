@@ -210,7 +210,11 @@ class CAN:
 
         self.state = keepers + noise
 
+        ga_scores = self.losses.clone()
+
         self.losses = torch.zeros_like(self.losses) # reset losses. TODO think: do we want some sort of moving average, or some other way of keeping track of expectation over time .. this is probably a question to be answered with some thinking from RL ..
+
+        return ga_scores
 
 
     def wei(self):

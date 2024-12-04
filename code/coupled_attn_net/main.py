@@ -3,10 +3,11 @@ import argparse
 import cv2
 import torch
 import numpy as np
-import networkx as nx
+from sympy import divisors
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
+from matplotlib.patches import Rectangle
+from matplotlib.animation import FuncAnimation
 
 from .coupled_attn_net import CAN
 from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims_for_ax_grid, inspect, plot
@@ -75,10 +76,11 @@ def main(args):
                 use_complex=args.complex,
             )
 
-            axh, axw = get_appropriate_dims_for_ax_grid(can.N)
+            axh, axw = get_appropriate_dims_for_ax_grid(can.N) ## TODO given state is one big tensor, could really just display one big tensor in a single ax. but this would require a change to can.output, given its working at the moment will leave as is for now
             fig, axs = plt.subplots(axh, axw)
             axs = axs.reshape(-1)
             for ax in axs: ax.axis('off')
+            fig.subplots_adjust(bottom=0.25)
 
             # axs[can.ker_idx].set_title('Ker')
             if can.query_idx is not None:
@@ -92,16 +94,18 @@ def main(args):
             axs[can.stdin_idx].set_title('Inp')
             axs[can.stdout_idx].set_title('Out')
 
+
+
             cmap = None if (args.channels >= 3) else 'grey'
 
-            ims = [axs[i].imshow(can.output(i)[0], cmap=cmap) for i in range(can.N)] # indexing into just first batch dim [0]
-            # ims = [axs[i].imshow(torch.mean(can.output(i), dim=0), cmap=cmap) for i in range(can.N)]
+            ims = [axs[i].imshow(can.output(i)[0], cmap=cmap) for i in range(can.N)] # indexing into just first batch dim [0] ## could try taking mean across batch dim..
 
             alpha = 0
             noise_scale = 0
-            ga_sel_period = args.ga_sel_period
-            ga_topk = args.ga_topk
-            ga_noise_scale = args.ga_noise_scale
+            ga_sel_period = args.ga_sel_period_max # initialize to longest selection period
+            ga_topk = args.ga_topk_max # initialize to least selective topk
+            ga_noise_scale = args.ga_noise_scale_min # initalize to least perturbative ga noise scale
+            ga_scores = torch.zeros(args.batch_dim)
 
             def step():
                 nonlocal alpha
@@ -109,6 +113,7 @@ def main(args):
                 nonlocal ga_sel_period
                 nonlocal ga_topk
                 nonlocal ga_noise_scale
+                nonlocal ga_scores
 
                 t = 0
                 while True:
@@ -128,7 +133,7 @@ def main(args):
                         ## deprecated .. # if not args.color: inp = inp inp = torch.mean(inp, dim=0).unsqueeze(0) assert np.all(inp.shape == can.output().shape), f'inp shape: {inp.shape},   can.out.shape: {can.output().shape}'
 
                     if args.use_ga and (t % ga_sel_period) == 0:
-                        can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
+                        ga_scores = can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
 
                     step_size = alpha
                     ns = step_size * noise_scale
@@ -149,7 +154,7 @@ def main(args):
             def draw_func(frame):
                 t, can = frame
                 for i in range(args.n_nodes):
-                    ims[i].set_data(can.output(i)[0]) # indexing into just first batch dim [0]
+                    ims[i].set_data(can.output(i)[0]) # indexing into just the first batch
                 fig.suptitle(str(t))
                 return ims
 
@@ -161,27 +166,90 @@ def main(args):
                 save_count=1,
             )
 
+
+            if args.use_ga: ## GA score observations
+
+                ga_fig, ga_ax = plt.subplots()
+                bar_width = 0.8
+                bars = [Rectangle((idx - bar_width / 2, 0), bar_width, 0, color='blue') for idx in range(args.batch_dim)]
+                for bar in bars:
+                    ga_ax.add_patch(bar)
+                ga_ax.set_xlim(-1, args.batch_dim)
+                ga_ax.set_title("GA scores")
+                ga_ax.set_xlabel("Batch")
+                ga_ax.set_ylabel("Prediction Error")
+
+                def generate_ga_scores():
+                    nonlocal ga_scores
+                    while True:
+                        yield ga_scores
+
+                def ga_score_draw_func(ga_scores):
+                    ga_ax.set_ylim(0, 1.5 * ga_scores.max() + 1e-9)
+                    for bar, score in zip(bars, ga_scores):
+                        bar.set_height(score)
+                    return bars
+
+                ga_score_ani = FuncAnimation(
+                    ga_fig,
+                    func=ga_score_draw_func,
+                    frames=generate_ga_scores,
+                    interval=10,
+                    save_count=1,
+                )
+
+
             def update_alpha(x):
                 nonlocal alpha
                 alpha = x
-            alpha_slider = Slider(fig.add_axes([0.2, 0.05, 0.65, 0.03]), label=r'$\alpha$', valmin=args.alphamin, valmax=args.alphamax, valinit=alpha)
+            alpha_slider = Slider(fig.add_axes((0.2, 0.03, 0.65, 0.03)), label=r'$\alpha$', valmin=args.alphamin, valmax=args.alphamax, valinit=alpha)
             alpha_slider.on_changed(update_alpha)
 
-            ## TODO rethink this part of the impl., maybe rename noise_scale to reflect new direction.
-            ## initially i was planning on noise_scale being a feedback signal that
-            ## adds noise for misprediction. now think the ga select will cover this,
-            ## so noise_scale more properly named peak_noise_scale or something.
-            ## but of course not crystalized on how adding noise to system. this
-            ## sinusoidal noising process is something i feel like i want, i think its
-            ## really a different noise scale than the noise that will drive the ga_selection
 
             if args.use_noise_fbk:
+
+                ## TODO rethink this part of the impl., maybe rename noise_scale to reflect new direction.
+                ## initially i was planning on noise_scale being a feedback signal that
+                ## adds noise for misprediction. now think the ga select will cover this,
+                ## so noise_scale more properly named peak_noise_scale or something.
+                ## but of course not crystalized on how adding noise to system. this
+                ## sinusoidal noising process is something i feel like i want, i think its
+                ## really a different noise scale than the noise that will drive the ga_selection
 
                 def update_noise_scale(x):
                     nonlocal noise_scale
                     noise_scale = x
-                noise_fbk_slider = Slider(fig.add_axes([0.2, 0.10, 0.65, 0.03]), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
+                noise_fbk_slider = Slider(fig.add_axes((0.2, 0.06, 0.65, 0.03)), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
                 noise_fbk_slider.on_changed(update_noise_scale)
+
+
+            if args.use_ga:
+                valid_topk_values = np.array(divisors(min(args.ga_topk_max, args.batch_dim)))
+
+                def update_ga_sel_period(x):
+                    nonlocal ga_sel_period
+                    ga_sel_period = x
+                ga_sel_period_slider = Slider(fig.add_axes((0.2, 0.09, 0.65, 0.03)), label=r'GA selection period', valmin=args.ga_sel_period_min, valmax=args.ga_sel_period_max, valinit=ga_sel_period, valstep=1)
+                ga_sel_period_slider.on_changed(update_ga_sel_period)
+
+                def update_ga_noise_scale(x):
+                    nonlocal ga_noise_scale
+                    ga_noise_scale = x
+                ga_noise_scale_slider = Slider(fig.add_axes((0.2, 0.12, 0.65, 0.03)), label=r'GA noise scale', valmin=args.ga_noise_scale_min, valmax=args.ga_noise_scale_max, valinit=ga_noise_scale)
+                ga_noise_scale_slider.on_changed(update_ga_noise_scale)
+
+                def update_ga_topk(x):
+                    nonlocal ga_topk
+                    ga_topk = valid_topk_values[np.argmin((valid_topk_values - x) ** 2)] # get nearest valid topk value
+                    if ga_topk_slider.val != ga_topk:
+                        ga_topk_slider.set_val(ga_topk) # snap slider to valid topk value
+
+                ga_topk_slider = Slider(fig.add_axes((0.2, 0.15, 0.65, 0.03)),
+                                        label=r'GA top k to keep',
+                                        valmin=args.ga_topk_min,
+                                        valmax=args.ga_topk_max,
+                                        valinit=ga_topk)
+                ga_topk_slider.on_changed(update_ga_topk)
 
             plt.show()
 
@@ -202,7 +270,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_dim', '-B', required=True, type=int)
     parser.add_argument('--channels', '-C', required=True, type=int)
 
-    ## not using these for now..
+    ## not using these for now.. instead just updating default args in CAN.__init__
     ## parser.add_argument('--wei_idx', required=False, default=None, type=int)
     ## parser.add_argument('--ker_idx', required=False, default=None, type=int)
     ## parser.add_argument('--stdin_idx', required=False, default=None, type=int)
@@ -225,12 +293,22 @@ if __name__ == '__main__':
     parser.add_argument('--noise_fbk_min', required=False, default=None, type=float)
     parser.add_argument('--noise_fbk_max', required=False, default=None, type=float)
 
+    ## parser.add_argument('--use_ga', action='store_true')
+    ## parser.add_argument('--ga_sel_period', required=False, default=10, type=int)
+    ## parser.add_argument('--ga_noise_scale', required=False, default=1, type=float)
+    ## parser.add_argument('--ga_topk', required=False, default=1, type=int)
+
+
     parser.add_argument('--use_ga', action='store_true')
-    parser.add_argument('--ga_sel_period', required=False, default=10, type=int)
-    parser.add_argument('--ga_noise_scale', required=False, default=1, type=float)
-    parser.add_argument('--ga_topk', required=False, default=1, type=int)
 
+    parser.add_argument('--ga_sel_period_min', required=False, default=1, type=int)
+    parser.add_argument('--ga_sel_period_max', required=False, default=100, type=int)
 
+    parser.add_argument('--ga_noise_scale_min', required=False, default=0, type=float)
+    parser.add_argument('--ga_noise_scale_max', required=False, default=1, type=float)
+
+    parser.add_argument('--ga_topk_min', required=False, default=1, type=int)
+    parser.add_argument('--ga_topk_max', required=False, default=None, type=int)
 
 
     ## TODO
@@ -245,12 +323,21 @@ if __name__ == '__main__':
 
     ## TODO really probably shouldnt have args.sample_period and
     #  args.clean_period. the 'correct' way of doing this (i expect) is just
-    #  having one. for now ignoring this though .. basically just forgot about sample period, hmm,  haha maybe want sample period to be controlled by some part of the state!
-    ## TODO deal with this when implementing ga batch sel
+    #  having one. for now ignoring this though .. basically just forgot about
+    #  sample period, hmm,  haha maybe want sample period to be controlled by
+    #  some part of the state!
+    ## TODO deal with this when implementing ga batch sel .. will deal with this when implementing 'decoding' .. this is next
 
-    assert args.ga_sel_period > 0, 'ga selection period must be positive'
+    # TODO this assert is kind of a joke, since this is pretty uncharacteristic
+    # of the rest of the code.. ah well will robustify throughout the code and
+    # actually validate the args once ive reached a stable implementation
+    assert args.ga_sel_period_min > 0, 'ga selection period must be positive'
 
     args.use_noise_fbk = (None not in [args.noise_fbk_min, args.noise_fbk_max])
+
+    if args.ga_topk_max is None:
+        args.ga_topk_max = args.batch_dim
+
 
 
     main(args)
