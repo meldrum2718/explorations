@@ -37,7 +37,6 @@ from ..utils import get_video_capture, rgb2grey, normalize, get_appropriate_dims
 ## powerful so as to warrant this tradeoff)
 
 
-
 def main(args):
     for k, v in vars(args).items():
         print(k, v)
@@ -76,29 +75,7 @@ def main(args):
                 use_complex=args.complex,
             )
 
-            axh, axw = get_appropriate_dims_for_ax_grid(can.N) ## TODO given state is one big tensor, could really just display one big tensor in a single ax. but this would require a change to can.output, given its working at the moment will leave as is for now
-            fig, axs = plt.subplots(axh, axw)
-            axs = axs.reshape(-1)
-            for ax in axs: ax.axis('off')
-            fig.subplots_adjust(bottom=0.25)
 
-            # axs[can.ker_idx].set_title('Ker')
-            if can.query_idx is not None:
-                axs[can.query_idx].set_title('Queries')
-            if can.key_idx is not None:
-                axs[can.key_idx].set_title('Keys')
-            if can.value_idx is not None:
-                axs[can.value_idx].set_title('Values')
-
-            axs[can.wei_idx].set_title('Wei')
-            axs[can.stdin_idx].set_title('Inp')
-            axs[can.stdout_idx].set_title('Out')
-
-
-
-            cmap = None if (args.channels >= 3) else 'grey'
-
-            ims = [axs[i].imshow(can.output(i)[0], cmap=cmap) for i in range(can.N)] # indexing into just first batch dim [0] ## could try taking mean across batch dim..
 
             alpha = 0
             noise_scale = 0
@@ -130,8 +107,6 @@ def main(args):
 
                         can.input(inp, node_idx=None, ga_eval=args.use_ga)
 
-                        ## deprecated .. # if not args.color: inp = inp inp = torch.mean(inp, dim=0).unsqueeze(0) assert np.all(inp.shape == can.output().shape), f'inp shape: {inp.shape},   can.out.shape: {can.output().shape}'
-
                     if args.use_ga and (t % ga_sel_period) == 0:
                         ga_scores = can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
 
@@ -151,6 +126,32 @@ def main(args):
                     
                     yield t, can
 
+
+            ## set up figure for displaying the dyn.sys and some sliders
+            axh, axw = get_appropriate_dims_for_ax_grid(can.N) ## TODO given state is one big tensor, could really just display one big tensor in a single ax. but this would require a change to can.output, given its working at the moment will leave as is for now
+            fig, axs = plt.subplots(axh, axw)
+            axs = axs.reshape(-1)
+            for ax in axs: ax.axis('off')
+            fig.subplots_adjust(bottom=0.25)
+
+            # axs[can.ker_idx].set_title('Ker')
+            if can.query_idx is not None:
+                axs[can.query_idx].set_title('Queries')
+            if can.key_idx is not None:
+                axs[can.key_idx].set_title('Keys')
+            if can.value_idx is not None:
+                axs[can.value_idx].set_title('Values')
+
+            axs[can.wei_idx].set_title('Wei')
+            axs[can.stdin_idx].set_title('Inp')
+            axs[can.stdout_idx].set_title('Out')
+
+            cmap = None if (args.channels >= 3) else 'grey'
+
+            ims = [axs[i].imshow(can.output(i)[0], cmap=cmap) for i in range(can.N)] # indexing into just first batch dim [0] ## could try taking mean across batch dim..
+
+
+            ## set up animation
             def draw_func(frame):
                 t, can = frame
                 for i in range(args.n_nodes):
@@ -167,10 +168,10 @@ def main(args):
             )
 
 
-            if args.use_ga: ## GA score observations
+            if args.use_ga: ## set up GA score observations
 
                 ga_fig, ga_ax = plt.subplots()
-                bar_width = 0.8
+                bar_width = 0.5
                 bars = [Rectangle((idx - bar_width / 2, 0), bar_width, 0, color='blue') for idx in range(args.batch_dim)]
                 for bar in bars:
                     ga_ax.add_patch(bar)
@@ -199,6 +200,8 @@ def main(args):
                 )
 
 
+            ## set up sliders for interactively changing some hyperparams
+
             def update_alpha(x):
                 nonlocal alpha
                 alpha = x
@@ -207,7 +210,6 @@ def main(args):
 
 
             if args.use_noise_fbk:
-
                 ## TODO rethink this part of the impl., maybe rename noise_scale to reflect new direction.
                 ## initially i was planning on noise_scale being a feedback signal that
                 ## adds noise for misprediction. now think the ga select will cover this,
@@ -258,7 +260,6 @@ def main(args):
                 cap.release()
                 cv2.destroyAllWindows()
                 cv2.waitKey(1)
-                plt.cla()
 
 
 if __name__ == '__main__':

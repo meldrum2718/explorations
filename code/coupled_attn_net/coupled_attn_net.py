@@ -1,5 +1,6 @@
 import math
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from ..utils import inspect, normalize
@@ -87,6 +88,7 @@ class CAN:
         value_idx: int = 2,
         stdin_idx: int = 4,
         stdout_idx: int = 5,
+        decode_idx: int = 6,
         use_complex: bool = True,
         clip_min: float = -1,
         clip_max: float = 1,
@@ -108,8 +110,9 @@ class CAN:
         self.clip_min = clip_min
         self.clip_max = clip_max
 
-
-        self.rand = torch.randn ## TODO check what happens if we use uniform (torch.rand) instead of normal. is there any qualitative difference? what about other initializations?
+        ## TODO check what happens if we use uniform (torch.rand) instead of normal. is there any qualitative difference? what about other initializations?
+        self.rand = torch.randn
+        self.rand_like = torch.randn_like
 
         self.complex = use_complex
         self.dtype = torch.cfloat if self.complex else torch.float
@@ -125,10 +128,13 @@ class CAN:
         self.query_idx = query_idx
         self.key_idx = key_idx
         self.value_idx = value_idx
-        self.stdout_idx = min(stdout_idx, N - 1)
         self.stdin_idx = min(stdin_idx, N - 1)
+        self.stdout_idx = min(stdout_idx, N - 1)
+        self.decode_idx = min(stdin_idx, N - 1)
 
         self.color = (C >= 3)
+        self.first_decode = True
+        self.activation = nn.GELU()
 
     def output(self, node_idx=None):
         """ output from self.state[node_idx], ready for matplotlib.
@@ -178,7 +184,7 @@ class CAN:
 
 
     def add_noise(self, noise_scale: float, batch_dim: int = None):
-        self.state += noise_scale * torch.randn_like(self.state)
+        self.state += noise_scale * self.rand_like(self.state) # TODO ,dtype=self.dtype ... but really complex dtype should be handled properly, not hackily .. i suppose wait on this one..
         self.proj_to_torus()
 
     def ga_step(self, k, max_noise_scale):
@@ -206,7 +212,7 @@ class CAN:
         noise_scale = torch.linspace(0, max_noise_scale, self.B // k).reshape(-1, 1)
         noise_scale = noise_scale.expand(self.B // k, k).reshape(1, self.B, 1, 1, 1)
 
-        noise = torch.randn_like(self.state) * noise_scale
+        noise = self.rand_like(self.state) * noise_scale
 
         self.state = keepers + noise
 
@@ -256,6 +262,140 @@ class CAN:
         else:
             # some kinda hacky coersion of a real tensor to [0, 1]^self.state.numel -- hacky since multiplication really doesnt play nice with this projection (observe $(1+a)*b = ab + b \neq ab$ (mod 1)) (i.e. this map onto the torus is not a homomorphism for real multiplication .. or something like that!)
             self.state = torch.frac(1 + torch.frac(self.state))
+
+
+
+
+        # Note: in the following implementations, the convolutions are brittle in
+        # the sense that stride and kernel size are assumed to be the right
+        # shapes (i.e. up conv has stride 2, kernel size 4, down conv has
+        # stride 2, kernels size 3).. expect errors if messing with these
+        # quantities .. TODO could make the code more robust, but moving fast
+        # and light rn
+
+        ## TODO observe assymetry in interpolation .. dont love this but simplest impl i can think of at the moment
+    def get_conv_weight(self, w, kh=3, kw=3, ks=None):
+        if ks is not None:
+            kh = kw = ks
+        """ assume w: (B, C, H, W) """
+        w = F.interpolate(w, size=(kh * self.C, kw), mode='bilinear', antialias=True) # (B, C, 3kh, kw) ## TODO antialias
+        w = w.reshape(self.B, self.C, kh, self.C, kw) # (B, C, kh, C, kw)
+        w = w.permute(0, 1, 3, 2, 4)  # (B, C, C, kh, kw) ## TODO consider a different permutation (0, 3, 1, 2, 4)
+        return w
+
+    def batched_conv(self, x, wei, padding=1, stride=1):
+        b, c, h, w = x.shape
+        new_h = h // stride
+        new_w = w // stride
+        x = F.conv2d(
+            input=x.reshape(1, b*c, h, w),
+            weight=wei.reshape(b*c, c, 3, 3),
+            padding=padding,
+            stride=stride,
+            groups=b,
+        ).reshape(b, c, new_h, new_w)
+        return x
+
+    def batched_conv_transpose(self, x, wei, padding=1, stride=1):
+        b, c, h, w = x.shape
+        _, cout, cin, kh, kw = wei.shape
+
+        if isinstance(stride, int):
+            sh = sw = stride
+        else: ## assume stride is a 2-tuple
+            sh, sw = stride
+
+        new_h = h * sh
+        new_w = w * sw
+        x = F.conv_transpose2d(
+            input=x.reshape(1, b*c, h, w),
+            weight=wei.reshape(b*cout, cin, kh, kw),
+            padding=padding,
+            stride=(sh, sw),
+            groups=b,
+        ).reshape(b, c, new_h, new_w)
+        return x
+
+
+    def conv_block(self, x, wei, padding=1, stride=1, use_activation=True):
+        x = self.batched_conv(x, wei, padding=padding, stride=stride)
+        if use_activation:
+            x = self.activation(x)
+        return x
+
+    def conv_transpose_block(self, x, wei, padding=1, stride=1, use_activation=True):
+        x = self.batched_conv_transpose(x, wei, padding=padding, stride=stride)
+        if use_activation:
+            x = self.activation(x)
+        return x
+
+
+    def down_block(self, x, wei):
+        """ cut x.H, x.W in half. """
+        return self.conv_block(x, wei, padding=1, stride=2)
+
+    def up_block(self, x, wei):
+        """ double x.H, x.W """
+        return self.conv_transpose_block(x, wei, padding=1, stride=2)
+
+    def decode(self):
+        ## unet style decoder. just keeping channel dim constant throughout as it simplifies things a bit.. hence adding rather than concatentating ..
+        decoder_kernels = self.ker(self.decode_idx) # (N, B, C, H, W)
+
+        x0 = self.state[self.stdout_idx] # (B, C, H, W)
+        w0 = self.get_conv_weight(decoder_kernels[0], ks=3)
+
+        x1 = self.conv_block(x0, w0) # (B, C, H, W)
+        w1 = self.get_conv_weight(decoder_kernels[1], ks=3)
+
+        x2 = self.down_block(x1, w1) # (B, C, H/2, W/2)
+        w2 = self.get_conv_weight(decoder_kernels[2], ks=3)
+
+        x3 = self.down_block(x2, w2) # (B, C, H/4, W/4)
+
+        x4 = F.interpolate(x3, size=(1, 1), mode='bilinear', antialias=True) # (B, C, 1, 1)
+
+        x3h, x3w = x3.shape[2], x3.shape[3] # H/4, W/4
+        w4 = self.get_conv_weight(decoder_kernels[3], kh=x3h, kw=x3w)
+
+        x5 = self.batched_conv_transpose(x4, w4, padding=0, stride=(x3h, x3w)) # (B, C, H/4, W/4)
+        w5 = self.get_conv_weight(decoder_kernels[4], ks=4)
+
+        x6 = self.up_block(x3 + x5, w5)
+        w6 = self.get_conv_weight(decoder_kernels[5], ks=4)
+
+        x7 = self.up_block(x2 + x6, w6)
+        w7 = self.get_conv_weight(decoder_kernels[6], ks=3)
+
+        x8 = self.conv_block(x1 + x7, w7, use_activation=False)
+
+        # w1 = get_conv_weight(decoder_kernels[1], kh=4, kw=4)
+        # x1 = conv_block(x0, w0)
+        # x2 = conv_transpose_block(x0, w0)
+        # x3 = down_block(x0, w0)
+        # x4 = up_block(x0, w1)
+        # inspect('x4', x4)
+
+        if self.first_decode:
+            inspect('x0', x0)
+            inspect('w0', w0)
+
+            inspect('x1', x1)
+            inspect('w1', w1)
+
+            inspect('x2', x2)
+            inspect('w2', w2)
+
+            inspect('x3', x3)
+
+            inspect('x4', x4)
+            inspect('w4', w4)
+
+            inspect('x5', x5)
+
+            self.first_decode = False
+
+        self.state[self.stdout_idx] = x8
 
 
     def step(self, alpha=0.01):
@@ -310,7 +450,10 @@ class CAN:
 
         self.state += alpha * dxdt
 
+        self.decode()
+
         self.proj_to_torus()
+
 
 
 
