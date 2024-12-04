@@ -80,7 +80,14 @@ def main(args):
             axs = axs.reshape(-1)
             for ax in axs: ax.axis('off')
 
-            axs[can.ker_idx].set_title('Ker')
+            # axs[can.ker_idx].set_title('Ker')
+            if can.query_idx is not None:
+                axs[can.query_idx].set_title('Queries')
+            if can.key_idx is not None:
+                axs[can.key_idx].set_title('Keys')
+            if can.value_idx is not None:
+                axs[can.value_idx].set_title('Values')
+
             axs[can.wei_idx].set_title('Wei')
             axs[can.stdin_idx].set_title('Inp')
             axs[can.stdout_idx].set_title('Out')
@@ -195,10 +202,12 @@ if __name__ == '__main__':
     parser.add_argument('--batch_dim', '-B', required=True, type=int)
     parser.add_argument('--channels', '-C', required=True, type=int)
 
-    parser.add_argument('--wei_idx', required=False, default=None, type=int)
-    parser.add_argument('--ker_idx', required=False, default=None, type=int)
-    parser.add_argument('--stdin_idx', required=False, default=None, type=int)
-    parser.add_argument('--stdout_idx', required=False, default=None, type=int)
+    ## not using these for now..
+    ## parser.add_argument('--wei_idx', required=False, default=None, type=int)
+    ## parser.add_argument('--ker_idx', required=False, default=None, type=int)
+    ## parser.add_argument('--stdin_idx', required=False, default=None, type=int)
+    ## parser.add_argument('--stdout_idx', required=False, default=None, type=int)
+    parser.add_argument('--key_idx', required=False, default=None, type=int)
 
     parser.add_argument('--clip_min', '-cmi', default=-2, type=float) # deprecated if using different activation .
     parser.add_argument('--clip_max', '-cma', default=2, type=float)

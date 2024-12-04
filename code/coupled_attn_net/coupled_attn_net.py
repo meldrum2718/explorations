@@ -16,7 +16,6 @@ def bmm(x, w):
     ).reshape(B, N, C, H, W).transpose(0, 1)
 
 
-
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     L, S = query.size(-2), key.size(-2)
@@ -43,15 +42,6 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = torch.softmax(attn_weight.abs(), dim=-1)
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True).to(value.dtype)
     return attn_weight @ value
-
-
-
-
-
-
-
-
-
 
 
 #TODO try having another state and then let them evolve together.. coupled
@@ -92,9 +82,11 @@ class CAN:
         W: int,
         N: int,
         wei_idx: int = 0,
-        ker_idx: int = 1,
-        stdin_idx: int = 2,
-        stdout_idx: int = 3,
+        query_idx: int = None,
+        key_idx: int = 2,
+        value_idx: int = 2,
+        stdin_idx: int = 4,
+        stdout_idx: int = 5,
         use_complex: bool = True,
         clip_min: float = -1,
         clip_max: float = 1,
@@ -107,15 +99,14 @@ class CAN:
             if self.verbose:
                 print(*args)
 
+        self.N = N
         self.B = B
         self.C = C
         self.H = H
         self.W = W
-        self.N = N
 
         self.clip_min = clip_min
         self.clip_max = clip_max
-
 
 
         self.rand = torch.randn ## TODO check what happens if we use uniform (torch.rand) instead of normal. is there any qualitative difference? what about other initializations?
@@ -130,7 +121,10 @@ class CAN:
         self.losses = torch.zeros(B)
 
         self.wei_idx = min(wei_idx, N - 1)
-        self.ker_idx = min(ker_idx, N - 1)
+        # self.ker_idx = min(ker_idx, N - 1)
+        self.query_idx = query_idx
+        self.key_idx = key_idx
+        self.value_idx = value_idx
         self.stdout_idx = min(stdout_idx, N - 1)
         self.stdin_idx = min(stdin_idx, N - 1)
 
@@ -233,8 +227,11 @@ class CAN:
         return wei
 
 
-    def ker(self):
-        k = self.state[self.ker_idx] # (B, C, H, W)                                      ## get the node that parameterizes the kernels
+    def ker(self, control_node_idx):
+        if control_node_idx is None:
+            return self.state
+
+        k = self.state[control_node_idx] # (B, C, H, W)                                      ## get the node that parameterizes the kernels
         if self.complex: k = k.real
         k = torch.mean(k, dim=1).unsqueeze(1) # (B, C, H, W) -> (B, 1, H, W)             ## make into a b/w image
         # k = F.interpolate(k, size=(self.N, self.N)).squeeze(1) # (B, H, W) -> (B, N, N)  ## make correct shape
@@ -275,28 +272,40 @@ class CAN:
         ## TODO come up with a principled way of doing the step ..
         ## TODO think about doing some learned linear transformations, i.e. with mha or something..
 
-        dxdt = torch.zeros_like(self.state)
 
-        wei = self.wei() # (B, N, N)
-        ker = self.ker() # (N, B, C, H, W)
+        # ker = self.ker(self.ker_idx) # (N, B, C, H, W)
 
         # # TODO observe that here there is no communication across channels .. i.e. C is treated as just another batch dim here ..
         # sk = self.state @ ker.transpose(-2, -1)
 
         # attn
-        sk = scaled_dot_product_attention(
-            query=self.state.reshape(self.N, self.B, -1).transpose(0, 1),
-            key=ker.reshape(self.N, self.B, -1).transpose(0, 1),
-            value=ker.reshape(self.N, self.B, -1).transpose(0, 1),
+        query = self.ker(self.query_idx)
+        key = self.ker(self.key_idx)
+        value = self.ker(self.value_idx)
+
+        query = query.reshape(self.N, self.B, -1).transpose(0, 1)
+        key = key.reshape(self.N, self.B, -1).transpose(0, 1)
+        value = value.reshape(self.N, self.B, -1).transpose(0, 1)
+
+        scale_factor = 1 / math.sqrt(query.size(-1))
+
+        attn = scaled_dot_product_attention(
+            query=query,
+            key=key,
+            value=value,
+            scale=scale_factor,
         ).transpose(0, 1).reshape(self.N, self.B, self.C, self.H, self.W)
 
-        dxdt = sk
-        ## TODO pass in a hyperparam whether or not to use wei ..
-        # dxdt += bmm(sk, wei) # flow sk along adjacency structure given by wei .. currently untrained, but seems like uncommenting this line gives somewhat less interesting behavior. of course, really should implement the ga first and then make judgements about expressivity after a bit of selection
+        dxdt = torch.zeros_like(self.state)
+
+        dxdt += attn
+        ## TODO pass in a hyperparam whether or not to use wei .. for now just commenting out.. doesnt appear (visually) to add to expressivity. theoretically i feel like it should help but idk.. perhaps its a question of introducing a scaling factor like in SDPA .. in fact i think this would work well ..
+        ## TODO add a scaling param ..
+        wei = self.wei() # (B, N, N)
+        # dxdt += bmm(attn, wei) * scale_factor # flow sk along adjacency structure given by wei .. currently untrained, but seems like uncommenting this line gives somewhat less interesting behavior. of course, really should implement the ga first and then make judgements about expressivity after a bit of selection
 
         self.state += alpha * dxdt
 
-        # self.activation()
         self.proj_to_torus()
 
 
