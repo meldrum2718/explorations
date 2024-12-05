@@ -75,8 +75,6 @@ def main(args):
                 use_complex=args.complex,
             )
 
-
-
             alpha = 0
             noise_scale = 0
             ga_sel_period = args.ga_sel_period_max # initialize to longest selection period
@@ -95,17 +93,22 @@ def main(args):
                 t = 0
                 while True:
                     t += 1
-                    inp = None
-                    if args.video_input and (t % args.sample_period) == 0:
-                        _, inp = cap.read()
-                        # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
-                        inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
-                        inp = cv2.resize(inp, (args.width, args.height), interpolation = cv2.INTER_AREA) / 255.0
-                        inp = torch.Tensor(inp) # (H, W, C)
-                        if args.channels < 3:
-                            inp = inp.mean(dim=-1).unsqueeze(-1)
+                    inp = torch.zeros(args.height, args.width, 3 if (args.channels >= 3) else 1)
+                    if args.video_input:
+                        if (t % args.sample_period) == 0:
+                            _, inp = cap.read()
+                            # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
+                            inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
+                            inp = cv2.resize(inp, (args.width, args.height), interpolation = cv2.INTER_AREA) / 255.0
+                            inp = torch.Tensor(inp) # (H, W, C)
+                            if args.channels < 3:
+                                inp = inp.mean(dim=-1).unsqueeze(-1)
 
-                        can.input(inp, node_idx=None, ga_eval=args.use_ga)
+                        inp_noise_scale = (t % args.sample_period) / args.sample_period
+                        noise = torch.randn_like(inp) * inp_noise_scale
+                        noisy_inp = inp + noise
+
+                        can.input(noisy_inp, node_idx=None, ga_eval=args.use_ga)
 
                     if args.use_ga and (t % ga_sel_period) == 0:
                         ga_scores = can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)
@@ -115,6 +118,7 @@ def main(args):
 
                     if args.use_noise_fbk:
 
+                        ## TODO clean period should be coupled with sample_period ..
                         if args.clean_period > 0:
                             t_osscil = torch.sin(torch.Tensor([t / args.clean_period])) ** 2 # time param for interpolation between diffeq step and noising process
                             t_osscil = t_osscil.item()

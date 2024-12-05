@@ -278,7 +278,7 @@ class CAN:
         if ks is not None:
             kh = kw = ks
         """ assume w: (B, C, H, W) """
-        w = F.interpolate(w, size=(kh * self.C, kw), mode='bilinear', antialias=True) # (B, C, 3kh, kw) ## TODO antialias
+        w = F.interpolate(w, size=(kh * self.C, kw), mode='bilinear', antialias=True) # (B, C, 3kh, kw)
         w = w.reshape(self.B, self.C, kh, self.C, kw) # (B, C, kh, C, kw)
         w = w.permute(0, 1, 3, 2, 4)  # (B, C, C, kh, kw) ## TODO consider a different permutation (0, 3, 1, 2, 4)
         return w
@@ -338,7 +338,7 @@ class CAN:
         """ double x.H, x.W """
         return self.conv_transpose_block(x, wei, padding=1, stride=2)
 
-    def decode(self):
+    def decode_unet_style(self):
         ## unet style decoder. just keeping channel dim constant throughout as it simplifies things a bit.. hence adding rather than concatentating ..
         decoder_kernels = self.ker(self.decode_idx) # (N, B, C, H, W)
 
@@ -398,6 +398,72 @@ class CAN:
         self.state[self.stdout_idx] = x8
 
 
+    def decode_lightweight(self):
+        # decoder_kernels = self.ker(self.decode_idx) # (N, B, C, H, W)
+        decoder_kernel = self.state[self.decode_idx]
+
+        x0 = self.state[self.stdout_idx] # (B, C, H, W)
+        w0 = self.get_conv_weight(decoder_kernel, ks=3)
+
+        x1 = self.conv_block(x0, w0) # (B, C, H, W)
+
+        self.state[self.stdout_idx] = x1
+
+        ## w1 = self.get_conv_weight(decoder_kernels[1], ks=3)
+
+        ## x2 = self.down_block(x1, w1) # (B, C, H/2, W/2)
+        ## w2 = self.get_conv_weight(decoder_kernels[2], ks=3)
+
+        ## x3 = self.down_block(x2, w2) # (B, C, H/4, W/4)
+
+        ## x4 = F.interpolate(x3, size=(1, 1), mode='bilinear', antialias=True) # (B, C, 1, 1)
+
+        ## x3h, x3w = x3.shape[2], x3.shape[3] # H/4, W/4
+        ## w4 = self.get_conv_weight(decoder_kernels[3], kh=x3h, kw=x3w)
+
+        ## x5 = self.batched_conv_transpose(x4, w4, padding=0, stride=(x3h, x3w)) # (B, C, H/4, W/4)
+        ## w5 = self.get_conv_weight(decoder_kernels[4], ks=4)
+
+        ## x6 = self.up_block(x3 + x5, w5)
+        ## w6 = self.get_conv_weight(decoder_kernels[5], ks=4)
+
+        ## x7 = self.up_block(x2 + x6, w6)
+        ## w7 = self.get_conv_weight(decoder_kernels[6], ks=3)
+
+        ## x8 = self.conv_block(x1 + x7, w7, use_activation=False)
+
+        ## # w1 = get_conv_weight(decoder_kernels[1], kh=4, kw=4)
+        ## # x1 = conv_block(x0, w0)
+        ## # x2 = conv_transpose_block(x0, w0)
+        ## # x3 = down_block(x0, w0)
+        ## # x4 = up_block(x0, w1)
+        ## # inspect('x4', x4)
+
+        ## if self.first_decode:
+        ##     inspect('x0', x0)
+        ##     inspect('w0', w0)
+
+        ##     inspect('x1', x1)
+        ##     inspect('w1', w1)
+
+        ##     inspect('x2', x2)
+        ##     inspect('w2', w2)
+
+        ##     inspect('x3', x3)
+
+        ##     inspect('x4', x4)
+        ##     inspect('w4', w4)
+
+        ##     inspect('x5', x5)
+
+        ##     self.first_decode = False
+
+        ## self.state[self.stdout_idx] = x8
+
+
+
+
+
     def step(self, alpha=0.01):
         """
         update: X += alpha * dXdt
@@ -450,7 +516,7 @@ class CAN:
 
         self.state += alpha * dxdt
 
-        self.decode()
+        # self.decode_unet_style()
 
         self.proj_to_torus()
 
