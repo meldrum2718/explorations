@@ -35,6 +35,7 @@ def main(args):
             alpha = 0.1
             noise_scale = 0
             L = 0
+            input_alpha = 1
 
             H = W = args.N ** args.K
 
@@ -43,6 +44,7 @@ def main(args):
                 nonlocal alpha
                 nonlocal L
                 nonlocal noise_scale
+                nonlocal input_alpha
 
                 t = 0
                 while True:
@@ -57,12 +59,19 @@ def main(args):
                         if not use_color:
                             inp = inp.mean(dim=-1).unsqueeze(-1)
 
+                        input_idx = args.stdin_idx
+                        if args.use_random_input_idx:
+                            print('using random input idx')
+                            input_idx = torch.randint(0, args.N**2, size=(1,)).item()
+                        L_input = 0
+                        if args.use_random_input_L:
+                            L_input = torch.randint(0, L+1, size=(1,)).item()
                         
                         hcan.input(
                             inp,
-                            node_idx=torch.randint(0, args.N**2, size=(1,)).item(),
-                            L=torch.randint(0, L+1, size=(1,)).item(),
-                            alpha=0.3,
+                            node_idx=input_idx,
+                            L=L_input,
+                            alpha=input_alpha,
                         )
 
                     if args.use_noise_fbk:
@@ -112,13 +121,21 @@ def main(args):
             L_slider.on_changed(update_L)
 
 
+            def update_input_alpha(x):
+                nonlocal input_alpha
+                input_alpha = x
+            input_alpha_slider = Slider(fig.add_axes((0.2, 0.09, 0.65, 0.03)), label=r'input $\alpha$', valmin=0, valmax=1, valinit=input_alpha)
+            input_alpha_slider.on_changed(update_input_alpha)
+
+
+
 
             if args.use_noise_fbk:
 
                 def update_noise_scale(x):
                     nonlocal noise_scale
                     noise_scale = x
-                noise_fbk_slider = Slider(fig.add_axes((0.2, 0.09, 0.65, 0.03)), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
+                noise_fbk_slider = Slider(fig.add_axes((0.2, 0.12, 0.65, 0.03)), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
                 noise_fbk_slider.on_changed(update_noise_scale)
 
             plt.show()
@@ -143,6 +160,8 @@ if __name__ == '__main__':
     parser.add_argument('--stdin_idx', required=False, default=None, type=int)
     ## parser.add_argument('--stdout_idx', required=False, default=None, type=int)
 
+    parser.add_argument('--use_random_input_idx', action='store_true')
+    parser.add_argument('--use_random_input_L', action='store_true')
 
     parser.add_argument('--video_input', action='store_true')
 
