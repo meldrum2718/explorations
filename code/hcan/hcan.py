@@ -56,7 +56,6 @@ class HCAN:
         self.stdout_idx = stdout_idx
 
         self.color = (C >= 3)
-        self.is_first_step = True
 
 
     def output(self, node_idx=None):
@@ -196,6 +195,49 @@ class HCAN:
         or potentially, when building more hand cratfted architectures, would
         presumably like to be able to control the 'inertia' (alpha) of the
         various nodes..
+
+
+        Now:
+            going to build a more interesting information flow into the step.
+            would like to use a geometric graph type approach. now, something
+            that seems the simplest is simply letting the context for the self
+            attention be a sum of the neighboring nodes. yeah i think this is
+            the way, this way can have many edges but still only need to to do
+            one attn op per node.
+
+            ok, so then, how to implement: could just do a sum over
+            torch.roll(dims=(1,2)) copies of
+            state:(B,n,n,n^(k-l-1),n&(k-l-1),c). observe that this introduces
+            nested tori inside the 2d array.. could be nice, could also be
+            confounding to the 2d structure of the hierarchical nesting.. (tori in the sense of the unit square with opposite edges identified)
+
+            alternatively could do a sum over torch.roll(dims=(1,2)) copies of
+            state:(n^k, n^k, n^(k-l), n^(k-l)), or even a batched matmul (hmm
+            ideally sparse id think..) .. thinking about this and it seems
+            really more of a correct way .. idk feels like a nice way of
+            avoiding hard edges in the state, and then can try having input
+            cover the whole state and then ensure that there are enough
+            channels for the diffeq to play out in the hidden channels. then
+            will like to visualize the hidden channels as well, so this
+            requires changing main.py
+            the batched matmul would allow for encoding arbitrary graphs as the
+            connectivity structure .. then could even have something like
+            different adjacency structures for different scales .. could open
+            up some interesting possibilities..
+
+
+            requiring least changes is just renaming letting context be a sum
+            of torch.rolls of the current state, then doing cross attention on
+            (state, context). or perhaps a torch.conv with a gaussian kernel.
+            probably this is the best way to try for right now. either of these
+            two things are what i ought to implement next ..
+
+            ok, plan: lets try the local sum because it seems so very quick to
+            implement. then after that lets make state.shape be the more
+            sensible (n^k,n^k,n^(k-l),n^(k-l), c), and then we can just do
+            convolutions by flattening last 3 dims, and dont really need to
+            worry about off by 1 errors so much. might also want to change the
+            off by one errors found in `def input``
         """
 
 
@@ -206,15 +248,20 @@ class HCAN:
 
         L = torch.randint(0, Lmax+1, size=(1,)).item()
 
+        # pass to L-nested view
         state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
         state = state.permute(0, 2, 1, 3, 4) # (n^l, n^l, n^(k-l), n^(k-l), c)
         state = state.reshape(-1, N**(K-L), N**(K-L), C) # B, n^(k-l), n^(k-l), c)
         state = state.reshape(-1, N, N**(K-L-1), N, N**(K-L-1), C) # (B, n, n^(k-l-1), n^(k-l-1), c)
-        state = state.permute(0, 1, 3, 2, 4, 5) # (B, n, n, n^(k-l-1), n^^(k-l-1), c)
-        state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), C)
+        state = state.permute(0, 1, 3, 2, 4, 5) # (B, n, n, n^(k-l-1), n^(k-l-1), c)
         B = state.shape[0]
 
         # inspect('state', state)
+
+        shifts = torch.randint(-1, 2, size=(2,)).tolist()
+        nei = state.roll(shifts=shifts, dims=(1, 2))
+
+        state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), C)
 
         query = self.ker(state, self.query_idx)
         key = self.ker(state, self.key_idx)
@@ -224,25 +271,29 @@ class HCAN:
         # inspect('key:', key)
         # inspect('value:', value)
 
-        query = query.reshape(B, N, -1)
-        key = key.reshape(B, N, -1)
-        value = value.reshape(B, N, -1)
+        # query = query.reshape(B, N**2, -1) ## TODO changed from reshape(B,N,-1) to (B,N**2,-1), seems a bit more interesting.. TODO reason about exactly what were doing with the attn operation..
+        # key = key.reshape(B, N**2, -1)
+        # value = value.reshape(B, N**2, -1)
 
-        scale_factor = 1 / math.sqrt(query.size(-1))
+        query = state.reshape(B, N**2, -1)
+        key = value = nei.reshape(B, N**2, -1)
+
+        # scale_factor = 1 / math.sqrt(query.size(-1))
 
         attn = F.scaled_dot_product_attention(
             query=query,
             key=key,
             value=value,
-            scale=scale_factor,
+            # scale=scale_factor,
         ).reshape(state.shape)
 
         # inspect('attn', attn)
 
-        dxLdt = torch.zeros_like(state)
-        dxLdt += attn
+        dxdt = torch.zeros_like(state)
+        dxdt += attn
 
-        dxLdt = dxLdt.reshape(
+        # pass back to flat view
+        dxdt = dxdt.reshape(
             B, N, N, N**(K-L-1), N**(K-L-1), C
         ).permute(0, 1, 3, 2, 4, 5
         ).reshape(N**L, N**L, N**(K-L), N**(K-L), C
@@ -250,14 +301,5 @@ class HCAN:
         ).permute(0, 2, 1, 3, 4
         ).reshape(self.state.shape)
 
-        dxdt += dxLdt # / (L+1)
-
-        # inspect('dxdt', dxdt)
-
         self.state += alpha * dxdt
-
-        # self.decode_unet_style()
-
         self.proj_to_torus()
-
-        self.is_first_step = False
