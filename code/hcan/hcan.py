@@ -104,7 +104,7 @@ class HCAN:
         if self.C >= C: # if more channels in self.state than in inp
             state[:, node_idx, :, :, 0:C] = alpha * inp  +  (1 - alpha) * state[:, node_idx, :, :, 0:C]
         elif self.C == 1:
-            inp = torch.mean(inp, dim=1) # (1, C, H, W) -> (1, 1, H, W)
+            inp = torch.mean(inp, dim=1)# .unsqueeze(1) i think.. idk just seeing this right now, not testing right now.. # (1, C, H, W) -> (1, 1, H, W)
             state[:, node_idx] = alpha * inp  +  (1 - alpha) * state[node_idx]
         else:
             raise Exception('TODO have not handled case where (self.C != 1) and (C > self.C)')
@@ -207,7 +207,7 @@ class HCAN:
 
             ok, so then, how to implement: could just do a sum over
             torch.roll(dims=(1,2)) copies of
-            state:(B,n,n,n^(k-l-1),n&(k-l-1),c). observe that this introduces
+            state:(B,n,n,n^(k-l-1),n^(k-l-1),c). observe that this introduces
             nested tori inside the 2d array.. could be nice, could also be
             confounding to the 2d structure of the hierarchical nesting.. (tori in the sense of the unit square with opposite edges identified)
 
@@ -238,6 +238,42 @@ class HCAN:
             convolutions by flattening last 3 dims, and dont really need to
             worry about off by 1 errors so much. might also want to change the
             off by one errors found in `def input``
+
+
+            12/27 thinking about it .. ive just implemented information flow
+            across random translations of the grid at a hierarchical scale.
+            gives interesting results, even with doing it a bit wrong (the
+            nested tori inside the 2d array do not appear to help information
+            flow (really this should be expected as the nested tori flows in
+            the (n^k,n^k, n,n,n^(k-l-1),n^(k-l-1)) approach induces arbitrary
+            unhealthy boundaries as we view at different scales).
+            now thinking: precisely what i am doing here is thinking of the
+            information flow graph as being a caley graph, and i am randomly
+            choosing a color and then flowing cross attention along the edges
+            of the chosen color.
+            question: how to do the sort oh recursive state breakdown in more exotic groups than Z_n^2, in particular thinking of lie groups probably
+                think we want a sort of mesh over the space, assign a vector to
+                each node in the mesh, then view mesh with a recursive partitioning i.e. a kd-tree like.
+                thought about it a bit: seems to me like this:
+                    want to deal with a lie group. by definition this is a
+                    differentiable manifold, i.e. locally is a piece of R^d. Ok
+                    then we just have the nodes be a mesh over R^d, and do the
+                    recursive decomp as
+                    (n^k, ..., n^k, c) -> (n^l, ..., n^l, n^(k-l), ..., n^(k-l), c)
+                    with numel = cn^(kd) (i.e. d copies of n^k, and then d copies of n^l and n^(k-l))
+                    then we know every group is the subgroup of a symmetric
+                    group. and we know the symmetric group has something to do
+                    with GL_n. then lets just sample our differentials from I +
+                    epsilon*N(0, 1) or something. Then we warp the mesh
+                    according to the linear transformation (see homography
+                    computation code)
+
+            sampling from a lie algebra, and letting the group element act on
+            the coordinate. i guess then we probably want to do some map
+            through rep.theory to go from group theory land back to tensors
+            where we can do cross attention operations .. or something .. thing
+            is we really would like some hierarchical representations
+
         """
 
 
@@ -250,26 +286,35 @@ class HCAN:
 
         # pass to L-nested view
         state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
-        state = state.permute(0, 2, 1, 3, 4) # (n^l, n^l, n^(k-l), n^(k-l), c)
+        almost_flat_state = state.permute(0, 2, 1, 3, 4) # (n^l, n^l, n^(k-l), n^(k-l), c)
         state = state.reshape(-1, N**(K-L), N**(K-L), C) # B, n^(k-l), n^(k-l), c)
-        state = state.reshape(-1, N, N**(K-L-1), N, N**(K-L-1), C) # (B, n, n^(k-l-1), n^(k-l-1), c)
+        state = state.reshape(-1, N, N**(K-L-1), N, N**(K-L-1), C) # (B, n, n^(k-l-1), n, n^(k-l-1), c)
         state = state.permute(0, 1, 3, 2, 4, 5) # (B, n, n, n^(k-l-1), n^(k-l-1), c)
-        B = state.shape[0]
+        # state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), C)
+
+        B = N**(2*L)
 
         # inspect('state', state)
 
         shifts = torch.randint(-1, 2, size=(2,)).tolist()
-        nei = state.roll(shifts=shifts, dims=(1, 2))
+        nei = almost_flat_state.roll(
+            shifts=shifts, dims=(0, 1)
+        ).reshape(B, N, N**(K-L-1), N, N**(K-L-1), C
+        ).permute(0, 1, 3, 2, 4, 5) ## TODO I think we probably want to interpolate or take mean so dealing with (n^l,n^l, n, n, c) tensor regardless of l and get rid of that (n-k)
 
-        state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), C)
+        ## TODO rewrite this whole fwd pass thing, go for simple impl, simple is good fast and correct.
 
-        query = self.ker(state, self.query_idx)
-        key = self.ker(state, self.key_idx)
-        value = self.ker(state, self.value_idx)
+        #  TODO think about passing input into top 3 channels of the full
+        #   (n^k,n^k) state, then having step(..., L) only propegate information
+        #   through the last L+3:-1 channels .. this will allow for propegating
+        #   with large L while not disrupting the low frequency image structure
+        #   stored in earlier channel dims.
 
-        # inspect('query:', query)
-        # inspect('key:', key)
-        # inspect('value:', value)
+        # state = state.reshape(B, N**2, N**(K-L-1), N**(K-L-1), C)
+
+        # query = self.ker(state, self.query_idx)
+        # key = self.ker(state, self.key_idx)
+        # value = self.ker(state, self.value_idx)
 
         # query = query.reshape(B, N**2, -1) ## TODO changed from reshape(B,N,-1) to (B,N**2,-1), seems a bit more interesting.. TODO reason about exactly what were doing with the attn operation..
         # key = key.reshape(B, N**2, -1)
