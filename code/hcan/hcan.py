@@ -310,44 +310,56 @@ class HCAN:
             shifts=shifts, dims=(0, 1)
         )
 
-        nei = nei.reshape(N**(2*L), N**(K-L), N**(K-L), C)
-        state = state.reshape(N**(2*L), N**(K-L), N**(K-L), C) # N^(2*L), N^(K-L), N^(K-L), C)
+        nei = nei.reshape(
+            N**(2*L), N, N**(K-L-1), N, N**(K-L-1), C
+        ).permute(0, 1, 3, 2, 4, 5
+        ).reshape(N**(2*L), N**2, C*N**(2*(K-L-1)))
 
-        nei_interp = F.interpolate(
-            nei.permute(0, 3, 1, 2),
-            size=(N, N),
-            mode='bilinear',
-            antialias=True,
-        ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
+        state = state.reshape(
+            N**(2*L), N, N**(K-L-1), N, N**(K-L-1), C
+        ).permute(0, 1, 3, 2, 4, 5  # (N**(2*L), N, N, N**(K-L-1), N**(K-L-1), C)
+        ).reshape(N**(2*L), N**2, C*N**(2*(K-L-1)))
 
-        state_interp = F.interpolate(
-            state.permute(0, 3, 1, 2),
-            size=(N, N),
-            mode='bilinear',
-            antialias=True,
-        ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
+        # nei_interp = F.interpolate(
+        #     nei.permute(0, 3, 1, 2),
+        #     size=(N, N),
+        #     mode='bilinear',
+        #     antialias=True,
+        # ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
 
-        query = state_interp.reshape(N**(2*L), N**2, C)
-        key = value = nei_interp.reshape(N**(2*L), N**2, C)
+        # state_interp = F.interpolate(
+        #     state.permute(0, 3, 1, 2),
+        #     size=(N, N),
+        #     mode='bilinear',
+        #     antialias=True,
+        # ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
+
+        # query = state.reshape(N**(2*L), N**2, -1)
+        # key = value = nei.reshape(N**(2*L), N**2, -1)
 
         dxdt = F.scaled_dot_product_attention(
-            query=query,
-            key=key,
-            value=value,
-        ).reshape(N**(2*L), N, N, C)
+            query=state,
+            key=nei,
+            value=nei,
+        ) # (N**(2*L), N**2, C*N**(2*(K-L-1)))
 
-        dxdt = F.interpolate(
-            dxdt.permute(0, 3, 1, 2),
-            size=(N**(K-L), N**(K-L)),
-            mode='bilinear',
-            antialias=True,
-        ).permute(0, 2, 3, 1) # (N**(2*L), N**(K-L), N**(K-L), C) 
+        dxdt = dxdt.reshape(N**(2*L), N, N, N**(K-L-1), N**(K-L-1), C
+        ).permute(0, 1, 3, 2, 4, 5 # (N**(2*L), N, N**(K-L-1), N, N**(K-L-1), C)
+        ).reshape(N**L, N**L, N**(K-L), N**(K-L), C
+        ).permute(0, 2, 1, 3, 4
+        ).reshape(N**K, N**K, C)
+
+        # dxdt = F.interpolate(
+        #     dxdt.permute(0, 3, 1, 2),
+        #     size=(N**(K-L), N**(K-L)),
+        #     mode='bilinear',
+        #     antialias=True,
+        # ).permute(0, 2, 3, 1) # (N**(2*L), N**(K-L), N**(K-L), C) 
 
         dxdt = dxdt.reshape(
             N**L, N**L, N**(K-L), N**(K-L), C
         ).permute(0, 2, 1, 3, 4 # (N**L, N**(K-L), N**L, N**(K-L), C)
         ).reshape(N**K, N**K, C)
-
 
         self.state += alpha * dxdt
         self.proj_to_torus()
