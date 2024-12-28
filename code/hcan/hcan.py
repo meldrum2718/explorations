@@ -76,47 +76,35 @@ class HCAN:
         return out
 
 
-    def input(self, inp, node_idx=None, L=2, alpha=1):
+    def input(self, inp, node_idx=None, L=0, alpha=1):
         """ update state[idx] as a convex combination with inp."""
-        ## TODO take in a 'nest' param, then input into node_idx in the nested array
-        if node_idx is None:
-            node_idx = self.stdin_idx
 
-        H, W, C = inp.shape
-        N, K = self.N, self.K
+        C_inp = inp.shape[2]
+        N, K, C = self.N, self.K, self.C
 
-        state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), self.C)
-        state = state.permute(0, 2, 1, 3, 4) # (n^l, n^l, n^(k-l), n^(k-l), c)
-        state = state.reshape(-1, N**(K-L), N**(K-L), self.C) # B, n^(k-l), n^(k-l), c)
-        state = state.reshape(-1, N, N**(K-L-1), N, N**(K-L-1), self.C) # (B, n, n^(k-l-1), n^(k-l-1), c)
-        state = state.permute(0, 1, 3, 2, 4, 5) # (B, n, n, n^(k-l-1), n^^(k-l-1), c)
-        state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), self.C)
-        B = state.shape[0]
+        state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
+        state = state.permute(0, 2, 1, 3, 4) # (N^L, N^L, N^(K-L), N^(K-L), C)
+        state = state.reshape(N**(2*L), N**(K-L), N**(K-L), C) # N^(2*L), N^(K-L), N^(K-L), C)
+
         inp = F.interpolate(
-            inp.unsqueeze(0).permute(0, 3, 1, 2),
-            size=(N**(K-L-1), N**(K-L-1)),
+            inp.permute(2, 0, 1).unsqueeze(0),
+            size=(N**(K-L), N**(K-L)),
             mode='bilinear',
             antialias=True
-        ).permute(0, 2, 3, 1)
+        ).permute(0, 2, 3, 1) # (1, N**(K-L), N**(K-L), C_inp)
 
 
-
-        if self.C >= C: # if more channels in self.state than in inp
-            state[:, node_idx, :, :, 0:C] = alpha * inp  +  (1 - alpha) * state[:, node_idx, :, :, 0:C]
-        elif self.C == 1:
-            inp = torch.mean(inp, dim=1)# .unsqueeze(1) i think.. idk just seeing this right now, not testing right now.. # (1, C, H, W) -> (1, 1, H, W)
-            state[:, node_idx] = alpha * inp  +  (1 - alpha) * state[node_idx]
+        if node_idx is not None:
+            state[node_idx, :, :, 0:C_inp] = alpha * inp  +  (1 - alpha) * state[node_idx, :, :, 0:C_inp]
         else:
-            raise Exception('TODO have not handled case where (self.C != 1) and (C > self.C)')
+            state[..., 0:C_inp] = alpha * inp + (1 - alpha) * state[..., 0:C_inp]
 
-        self.state = state.reshape(
-            B, N, N, N**(K-L-1), N**(K-L-1), self.C
-        ).permute(0, 1, 3, 2, 4, 5
-        ).reshape(N**L, N**L, N**(K-L), N**(K-L), self.C
-        ).reshape(N**L, N**L, N**(K-L), N**(K-L), self.C
-        ).permute(0, 2, 1, 3, 4
-        ).reshape(self.state.shape)
+        state = state.reshape(
+            N**L, N**L, N**(K-L), N**(K-L), C
+        ).permute(0, 2, 1, 3, 4 # (N**L, N**(K-L), N**L, N**(K-L), C)
+        ).reshape(N**K, N**K, C)
 
+        self.state = state
         self.proj_to_torus()
 
 
@@ -186,7 +174,7 @@ class HCAN:
         self.state = torch.frac(1 + torch.frac(self.state))
 
 
-    def step(self, alpha=0.01, Lmax=0):
+    def step(self, alpha=0.01, L=0):
         """
         update: X += alpha * dXdt
 
@@ -265,14 +253,38 @@ class HCAN:
                     group. and we know the symmetric group has something to do
                     with GL_n. then lets just sample our differentials from I +
                     epsilon*N(0, 1) or something. Then we warp the mesh
-                    according to the linear transformation (see homography
-                    computation code)
+                    according to the projective transformation (see homography
+                    computation code, can directly use that here for the 2d
+                    image case)
 
             sampling from a lie algebra, and letting the group element act on
             the coordinate. i guess then we probably want to do some map
             through rep.theory to go from group theory land back to tensors
             where we can do cross attention operations .. or something .. thing
             is we really would like some hierarchical representations
+
+
+            TODO think about passing input into top 3 channels of the full
+            (n^k,n^k) state, then having step(..., L) only propegate information
+            through the last L+3:-1 channels .. this will allow for propegating
+            with large L while not disrupting the low frequency image structure
+            stored in earlier channel dims.
+
+            observe that we can also introduct more interesting
+            distributions for sampling from the lie algebra. In this way we can
+            achieve a sort of weighted graph. then i think what would be ideal
+            is to let some part of the state parameterize the distributions,
+            with each scale L having a different distribution associated with
+            it, and likely having the distribution for level L be
+            parameteerized by a lower frequency part of the state. in this way
+            we can achieve a sort of stability where low frequency parts of the
+            state, which have more 'inertia' inform the flow through higher
+            frequency parts of the state.
+
+            TODO rewrite this whole fwd pass thing, go for simple impl, simple is good fast and correct.
+
+            observe: probably dont need to antialias in downsample operations
+            since randomized smoothing should come from randomly sampling the translations
 
         """
 
@@ -282,69 +294,60 @@ class HCAN:
         N, K, C = self.N, self.K, self.C
         dxdt = torch.zeros_like(self.state)
 
-        L = torch.randint(0, Lmax+1, size=(1,)).item()
-
-        # pass to L-nested view
-        state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
-        almost_flat_state = state.permute(0, 2, 1, 3, 4) # (n^l, n^l, n^(k-l), n^(k-l), c)
-        state = state.reshape(-1, N**(K-L), N**(K-L), C) # B, n^(k-l), n^(k-l), c)
-        state = state.reshape(-1, N, N**(K-L-1), N, N**(K-L-1), C) # (B, n, n^(k-l-1), n, n^(k-l-1), c)
-        state = state.permute(0, 1, 3, 2, 4, 5) # (B, n, n, n^(k-l-1), n^(k-l-1), c)
-        # state = state.reshape(-1, N**2, N**(K-L-1), N**(K-L-1), C)
 
         B = N**(2*L)
+        # pass to L-nested view
+        state = self.state
+        # if L > 0: # only operate on lower frequency parts .. something about this feels pretty hacky, TODO look at this some more
+        #     state = state[..., 3+L:] # dont operate on the lower frequencies . this impl has just one hidden channel for each L, perhaps want to have more , TODO design decision
+        state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
+        state = state.permute(0, 2, 1, 3, 4) # (N^L, N^L, N^(K-L), N^(K-L), C)
 
-        # inspect('state', state)
+        ## TODO instead of this random (dx, dy) shift, prefer to take random 3x3 matrix and warp a mesh over R^2 like in image warping i.e. warp via a homography.
+        shifts = torch.randint(low=-1, high=2, size=(2,)).tolist()
 
-        shifts = torch.randint(-1, 2, size=(2,)).tolist()
-        nei = almost_flat_state.roll(
+        nei = state.roll(
             shifts=shifts, dims=(0, 1)
-        ).reshape(B, N, N**(K-L-1), N, N**(K-L-1), C
-        ).permute(0, 1, 3, 2, 4, 5) ## TODO I think we probably want to interpolate or take mean so dealing with (n^l,n^l, n, n, c) tensor regardless of l and get rid of that (n-k)
+        )
 
-        ## TODO rewrite this whole fwd pass thing, go for simple impl, simple is good fast and correct.
+        nei = nei.reshape(N**(2*L), N**(K-L), N**(K-L), C)
+        state = state.reshape(N**(2*L), N**(K-L), N**(K-L), C) # N^(2*L), N^(K-L), N^(K-L), C)
 
-        #  TODO think about passing input into top 3 channels of the full
-        #   (n^k,n^k) state, then having step(..., L) only propegate information
-        #   through the last L+3:-1 channels .. this will allow for propegating
-        #   with large L while not disrupting the low frequency image structure
-        #   stored in earlier channel dims.
+        nei_interp = F.interpolate(
+            nei.permute(0, 3, 1, 2),
+            size=(N, N),
+            mode='bilinear',
+            antialias=True,
+        ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
 
-        # state = state.reshape(B, N**2, N**(K-L-1), N**(K-L-1), C)
+        state_interp = F.interpolate(
+            state.permute(0, 3, 1, 2),
+            size=(N, N),
+            mode='bilinear',
+            antialias=True,
+        ).permute(0, 2, 3, 1) # (N**(2*L), N, N, C)
 
-        # query = self.ker(state, self.query_idx)
-        # key = self.ker(state, self.key_idx)
-        # value = self.ker(state, self.value_idx)
+        query = state_interp.reshape(N**(2*L), N**2, C)
+        key = value = nei_interp.reshape(N**(2*L), N**2, C)
 
-        # query = query.reshape(B, N**2, -1) ## TODO changed from reshape(B,N,-1) to (B,N**2,-1), seems a bit more interesting.. TODO reason about exactly what were doing with the attn operation..
-        # key = key.reshape(B, N**2, -1)
-        # value = value.reshape(B, N**2, -1)
-
-        query = state.reshape(B, N**2, -1)
-        key = value = nei.reshape(B, N**2, -1)
-
-        # scale_factor = 1 / math.sqrt(query.size(-1))
-
-        attn = F.scaled_dot_product_attention(
+        dxdt = F.scaled_dot_product_attention(
             query=query,
             key=key,
             value=value,
-            # scale=scale_factor,
-        ).reshape(state.shape)
+        ).reshape(N**(2*L), N, N, C)
 
-        # inspect('attn', attn)
+        dxdt = F.interpolate(
+            dxdt.permute(0, 3, 1, 2),
+            size=(N**(K-L), N**(K-L)),
+            mode='bilinear',
+            antialias=True,
+        ).permute(0, 2, 3, 1) # (N**(2*L), N**(K-L), N**(K-L), C) 
 
-        dxdt = torch.zeros_like(state)
-        dxdt += attn
-
-        # pass back to flat view
         dxdt = dxdt.reshape(
-            B, N, N, N**(K-L-1), N**(K-L-1), C
-        ).permute(0, 1, 3, 2, 4, 5
-        ).reshape(N**L, N**L, N**(K-L), N**(K-L), C
-        ).reshape(N**L, N**L, N**(K-L), N**(K-L), C
-        ).permute(0, 2, 1, 3, 4
-        ).reshape(self.state.shape)
+            N**L, N**L, N**(K-L), N**(K-L), C
+        ).permute(0, 2, 1, 3, 4 # (N**L, N**(K-L), N**L, N**(K-L), C)
+        ).reshape(N**K, N**K, C)
+
 
         self.state += alpha * dxdt
         self.proj_to_torus()

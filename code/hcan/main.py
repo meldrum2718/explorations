@@ -63,7 +63,7 @@ def main(args):
                         if args.use_random_input_idx:
                             print('using random input idx')
                             input_idx = torch.randint(0, args.N**2, size=(1,)).item()
-                        L_input = 0
+                        L_input = 1
                         if args.use_random_input_L:
                             L_input = torch.randint(0, L+1, size=(1,)).item()
                         
@@ -77,7 +77,8 @@ def main(args):
                     if args.use_noise_fbk:
                         hcan.add_noise(alpha * noise_scale)
 
-                    hcan.step(alpha=alpha, Lmax=L)
+                    # L = torch.randint(0, L+1, size=(1,)).item()
+                    hcan.step(alpha=alpha, L=L)
                     
                     yield t, hcan
 
