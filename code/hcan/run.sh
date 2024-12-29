@@ -6,7 +6,7 @@ python3 -m code.hcan.main \
     --alphamin 0 --alphamax 1 \
     --video_input \
     --stdin_idx 4 \
-    # --use_random_input_L \
     # --use_random_input_idx \
+    # --use_random_input_L \
     #
     # also -N 3 -K 6 gives interesting behavior

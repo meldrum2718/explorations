@@ -34,7 +34,7 @@ def main(args):
 
             alpha = 0.1
             noise_scale = 0
-            L = 0
+            L_step_max = 0
             input_alpha = 1
 
             H = W = args.N ** args.K
@@ -42,11 +42,12 @@ def main(args):
 
             def step():
                 nonlocal alpha
-                nonlocal L
+                nonlocal L_step_max
                 nonlocal noise_scale
                 nonlocal input_alpha
 
                 t = 0
+
                 while True:
                     t += 1
                     inp = torch.zeros(H, W, 3 if use_color else 1)
@@ -61,8 +62,8 @@ def main(args):
 
                         input_idx = args.stdin_idx
                         if args.use_random_input_idx:
-                            print('using random input idx')
                             input_idx = torch.randint(0, args.N**2, size=(1,)).item()
+
                         L_input = 1
                         if args.use_random_input_L:
                             L_input = torch.randint(0, L+1, size=(1,)).item()
@@ -75,10 +76,12 @@ def main(args):
                         )
 
                     if args.use_noise_fbk:
-                        hcan.add_noise(alpha * noise_scale)
+                        hcan.add_noise(alpha * noise_scale) # * pred_error
 
-                    # L = torch.randint(0, L+1, size=(1,)).item()
-                    hcan.step(alpha=alpha, L=L)
+                    L_step_sampler = torch.distributions.categorical.Categorical(logits=torch.arange(L_step_max + 1) + 1)
+                    L_step = L_step_sampler.sample()
+                    print('L_step:', L_step)
+                    hcan.step(alpha=alpha, L=L_step)
                     
                     yield t, hcan
 
@@ -115,11 +118,11 @@ def main(args):
             alpha_slider.on_changed(update_alpha)
 
 
-            def update_L(x):
-                nonlocal L
-                L = x
-            L_slider = Slider(fig.add_axes((0.2, 0.06, 0.65, 0.03)), label='L', valmin=0, valmax=args.K-1, valinit=0, valstep=1)
-            L_slider.on_changed(update_L)
+            def update_L_step_max(x):
+                nonlocal L_step_max
+                L_step_max = x
+            L_step_max_slider = Slider(fig.add_axes((0.2, 0.06, 0.65, 0.03)), label='L_step_max', valmin=0, valmax=args.K-1, valinit=0, valstep=1)
+            L_step_max_slider.on_changed(update_L_step_max)
 
 
             def update_input_alpha(x):
