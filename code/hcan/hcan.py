@@ -288,22 +288,16 @@ class HCAN:
 
         """
 
-
-        # attn
-        # inspect('self.state', self.state)
         N, K, C = self.N, self.K, self.C
-        dxdt = torch.zeros_like(self.state)
 
-
-        B = N**(2*L)
         # pass to L-nested view
         state = self.state
         # if L > 0: # only operate on lower frequency parts .. something about this feels pretty hacky, TODO look at this some more
         #     state = state[..., 3+L:] # dont operate on the lower frequencies . this impl has just one hidden channel for each L, perhaps want to have more , TODO design decision
-        state = self.state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
+        state = state.reshape(N**L, N**(K-L), N**L, N**(K-L), C)
         state = state.permute(0, 2, 1, 3, 4) # (N^L, N^L, N^(K-L), N^(K-L), C)
 
-        ## TODO instead of this random (dx, dy) shift, prefer to take random 3x3 matrix and warp a mesh over R^2 like in image warping i.e. warp via a homography.
+        ## TODO instead of this random (dx, dy) shift, prefer to take some 3x3 matrix and warp a mesh over R^2 like in image warping i.e. warp via a homography.
         shifts = torch.randint(low=-1, high=2, size=(2,)).tolist()
 
         nei = state.roll(
@@ -356,10 +350,10 @@ class HCAN:
         #     antialias=True,
         # ).permute(0, 2, 3, 1) # (N**(2*L), N**(K-L), N**(K-L), C) 
 
-        dxdt = dxdt.reshape(
-            N**L, N**L, N**(K-L), N**(K-L), C
-        ).permute(0, 2, 1, 3, 4 # (N**L, N**(K-L), N**L, N**(K-L), C)
-        ).reshape(N**K, N**K, C)
+        # dxdt = dxdt.reshape(
+        #     N**L, N**L, N**(K-L), N**(K-L), C
+        # ).permute(0, 2, 1, 3, 4 # (N**L, N**(K-L), N**L, N**(K-L), C)
+        # ).reshape(N**K, N**K, C)
 
         self.state += alpha * dxdt
         self.proj_to_torus()
