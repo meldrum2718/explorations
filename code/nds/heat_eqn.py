@@ -8,12 +8,12 @@ from matplotlib.widgets import Slider
 from matplotlib.animation import FuncAnimation
 
 
-from .diffeq import DynSys
-from ..utils import get_video_capture, get_appropriate_dims_for_ax_grid
+from .diffeq import DynSys, laplacian
+from ..utils import get_video_capture, get_appropriate_dims_for_ax_grid, inspect
 
 
 def activation(x):
-    return (x - x.min()) / (x.max() - x.min())
+    return x
     # return x.clip(0, 1)
     # return F.sigmoid(x)
 
@@ -33,10 +33,10 @@ def main(args):
 
             ds = DynSys(H=H, W=W, C=C, K=K)
 
-            sample_period = 1
+            use_camera = 1
 
             def step():
-                nonlocal sample_period
+                nonlocal use_camera
 
                 t = 0
 
@@ -44,7 +44,7 @@ def main(args):
 
                 while True:
                     t += 1
-                    if (t % sample_period) == 0:
+                    if use_camera:
                         _, inp = cap.read()
                         # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
                         inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
@@ -52,11 +52,26 @@ def main(args):
                         inp = torch.Tensor(inp) # (H, W, C)
                         if C == 1:
                             inp = inp.mean(dim=-1).unsqueeze(-1) # make black and white
+                        ds.step(inp, L=0)
+                    else:
 
-                    ds.step(inp, L=0)
+                        ## observe that we can achieve a variety of interesting
+                        ## behaviors just by twaking L, and also by changing the
+                        ## activation function used inside the DynSys.
+                        ## can get behaviors reminicent of NCA. can get heat
+                        ## diffusion. can get wave equation.
+
+                        # L = 3
+                        # L = torch.randint(low=0, high=K-1, size=(1,)).item()
+                        # L = t % 4
+                        L = 0
+                        cur_state = ds.state[L][-1]
+                        dxdt = 0.1 * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
+                        # inspect('dxdt', dxdt)
+                        # ds.step(- 0.01 * ds.state[0][-2], L=2) ## gives sinusoidal motion like. interestingly this exhibits a sort of memory for instantaneous movement.
+                        ds.step(dxdt, L=L+2) ## L=L+2 gives wave eqn like. L=L+1 give heat eqn like.
 
                     yield t, ds
-
 
             ## set up figure for displaying the dyn.sys and some sliders
             nrows, ncols = get_appropriate_dims_for_ax_grid(K+1)
@@ -64,7 +79,7 @@ def main(args):
             axs = axs.reshape(-1)
             for ax in axs: ax.axis('off')
             fig.subplots_adjust(bottom=0.25)
-            cmap = None
+            cmap = 'grey' if C == 1 else None
             ims = [axs[k].imshow(activation(ds.state[k][-1]), cmap=cmap) for k in range(K + 1)]
 
             ## set up animation
@@ -87,11 +102,11 @@ def main(args):
             )
 
 
-            def update_sample_period(x):
-                nonlocal sample_period
-                sample_period = int(x)
-            sample_period_slider = Slider(fig.add_axes((0.2, 0.03, 0.65, 0.03)), label='sample period', valmin=1, valmax=args.sample_period_max, valinit=1, valstep=1)
-            sample_period_slider.on_changed(update_sample_period)
+            def update_use_camera(x):
+                nonlocal use_camera
+                use_camera = int(x)
+            use_camera_slider = Slider(fig.add_axes((0.2, 0.03, 0.65, 0.03)), label='Use Camera Input', valmin=0, valmax=1, valinit=1, valstep=1)
+            use_camera_slider.on_changed(update_use_camera)
 
             plt.show()
 
@@ -109,8 +124,6 @@ if __name__ == '__main__':
     parser.add_argument('-W', required=True, type=int)
     parser.add_argument('-K', required=True, type=int)
     parser.add_argument('-C', required=True, type=int)
-
-    parser.add_argument('--sample_period_max', required=False, default=10, type=int)
 
     args = parser.parse_args()
 
