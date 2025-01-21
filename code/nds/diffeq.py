@@ -40,9 +40,6 @@ class DynSys:
                 self.state[k] = self.state[k].roll(shifts=(-1,), dims=(0,))
                 self.state[k][-1] = self.state[k-1][-1] - self.state[k-1][-2]
 
-        # for idx in range(len(self.state)):
-        #     self.state[idx] = 2 * F.tanh(self.state[idx])
-
 
 Dx = torch.tensor([-1, 1]).reshape(1, 1, 2).to(torch.float32)
 D2x = F.conv1d(Dx, Dx.flip(-1), padding=1).unsqueeze(0)

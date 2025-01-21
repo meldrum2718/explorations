@@ -13,9 +13,9 @@ from ..utils import get_video_capture, get_appropriate_dims_for_ax_grid, inspect
 
 
 def activation(x):
-    return x
+    # return x
     # return x.clip(0, 1)
-    # return F.sigmoid(x)
+    return F.tanh(x)
 
 
 def main(args):
@@ -62,11 +62,11 @@ def main(args):
                         ## diffusion. can get wave equation.
 
                         # L = 3
-                        # L = torch.randint(low=0, high=K-1, size=(1,)).item()
-                        # L = t % 4
-                        L = 0
+                        L = torch.randint(low=0, high=K-1, size=(1,)).item()
+                        L = t % (K-2)
+                        # L = 0
                         cur_state = ds.state[L][-1]
-                        dxdt = 0.1 * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
+                        dxdt = 0.5 * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
                         # inspect('dxdt', dxdt)
                         # ds.step(- 0.01 * ds.state[0][-2], L=2) ## gives sinusoidal motion like. interestingly this exhibits a sort of memory for instantaneous movement.
                         ds.step(dxdt, L=L+2) ## L=L+2 gives wave eqn like. L=L+1 give heat eqn like.
