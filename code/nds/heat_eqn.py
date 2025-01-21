@@ -13,9 +13,9 @@ from ..utils import get_video_capture, get_appropriate_dims_for_ax_grid, inspect
 
 
 def activation(x):
-    # return x
+    return x
     # return x.clip(0, 1)
-    return F.tanh(x)
+    # return F.tanh(x)
 
 
 def main(args):
