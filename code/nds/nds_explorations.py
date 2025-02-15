@@ -29,28 +29,32 @@ def main(args):
         cap = None
         try:
 
-            cap = get_video_capture()
+            # cap = get_video_capture()
 
             ds = DynSys(H=H, W=W, C=C, K=K)
             inp = DynSys(H=H, W=W, C=C, K=K)
 
-            ksize = 10
+            # dds = ds.resize(10, 10)
+
+            sigma_min = -1
+            sigma_max = 1
+
+            ksize = 5
             xmin = -torch.pi
             xmax = torch.pi
             ymin = -torch.pi
             ymax = torch.pi
             mu1 = 0
             mu2 = 0
-            s1 = 1; s2 = 0
-            s3 = 1; s4 = 1
+            s11 = 1; s12 = 0
             mu = torch.Tensor([mu1, mu2])
             sigma = torch.Tensor([
-                [s1, s2],
-                [s3, s4]
+                [s11, s12],
+                [s12, s11]
             ])
 
             ker = gauss_ker2d(ksize, ksize, xmin, xmax, ymin, ymax, mu, sigma)
-            log = laplacian(ker.reshape(1, 1, ksize, ksize))
+            lap = laplacian(ker.reshape(1, 1, ksize, ksize))
 
             # alpha_camera = 1
             freq = 1
@@ -63,39 +67,46 @@ def main(args):
                 nonlocal wave_speed
                 nonlocal bdy_radius
                 nonlocal ksize
-                nonlocal s1
-                nonlocal s2
-                nonlocal s3
-                nonlocal s4
+                nonlocal s11
+                nonlocal s12
+                nonlocal mu1
+                nonlocal mu2
                 nonlocal ker
-                nonlocal log
+                nonlocal lap
+                nonlocal ds
+                nonlocal H
+                nonlocal W
 
                 t = 0
 
-                mesh = torch.stack((
-                    torch.linspace(0, 1, H).unsqueeze(-1).expand(H, W),
-                    torch.linspace(0, 1, W).unsqueeze(0).expand(H, W)
-                ), dim=0)
-                pre_circle_mask = ((mesh - 0.5) ** 2).sum(dim=0) ** 0.5
  
                 while True:
+                    if (H != ds.H) or (W != ds.W):
+                        ds = ds.resize(H, W)
+
+
+                    mesh = torch.stack((
+                        torch.linspace(0, 1, H).unsqueeze(-1).expand(H, W),
+                        torch.linspace(0, 1, W).unsqueeze(0).expand(H, W)
+                    ), dim=0)
+                    pre_circle_mask = ((mesh - 0.5) ** 2).sum(dim=0) ** 0.5
                     circle_mask = pre_circle_mask > bdy_radius
                     mu = torch.Tensor([mu1, mu2])
                     sigma = torch.Tensor([
-                        [s1, s2],
-                        [s3, s4]
+                        [s11, s12],
+                        [s12, s11]
                     ])
                     ker = gauss_ker2d(ksize, ksize, xmin, xmax, ymin, ymax, mu, sigma)
-                    log = laplacian(ker.reshape(1, 1, ksize, ksize))
+                    lap = laplacian(ker.reshape(1, 1, ksize, ksize))
                     t += 1
-                    _, frame = cap.read()
+                    # _, frame = cap.read()
                     # convert frame to rgb with shape (h, w) and pixel values in [0, 1]
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frame = cv2.resize(frame, (W, H), interpolation = cv2.INTER_AREA) / 255.0
-                    frame = torch.Tensor(frame) # (H, W, C)
-                    if C == 1:
-                        frame = frame.mean(dim=-1).unsqueeze(-1) # make black and white
-                    inp.step(frame, L=0)
+                    # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # frame = cv2.resize(frame, (W, H), interpolation = cv2.INTER_AREA) / 255.0
+                    # frame = torch.Tensor(frame) # (H, W, C)
+                    # if C == 1:
+                    #     frame = frame.mean(dim=-1).unsqueeze(-1) # make black and white
+                    # inp.step(frame, L=0)
 
                     for _ in range(its_per_step := 5):
                         L = 0
@@ -103,7 +114,7 @@ def main(args):
                         # ddt = wave_speed * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
                         ddt = wave_speed * F.conv2d(
                             cur_state.unsqueeze(0).permute(0, 3, 1, 2),
-                            log,
+                            lap,
                             padding='same'
                         ).permute(0, 2, 3, 1).squeeze(0)
 
@@ -111,37 +122,39 @@ def main(args):
 
                         bdy_val = torch.Tensor([t * freq * (2 * torch.pi)]).sin().item()
                         for l in range(ds.K):
-                            ds.state[l][circle_mask.unsqueeze(0).unsqueeze(-1).expand(ds.state[l].shape)] = bdy_val
+                            ds.state[l][
+                                circle_mask.unsqueeze(0).unsqueeze(-1).expand(ds.state[l].shape)
+                            ] = bdy_val
 
                     yield t, ds
 
             ## set up figure for displaying the dyn.sys and some sliders
-            fig, axs = plt.subplots(3, 3)
+            fig, axs = plt.subplots(2, 3)
             axs = axs.reshape(-1)
             for ax in axs: ax.axis('off')
             fig.subplots_adjust(bottom=0.25)
             cmap = 'grey' if C == 1 else None
-            inp_ims = [axs[k].imshow(activation(inp.state[k][-1]), cmap=cmap) for k in range(3)]
-            inp_cbars = [plt.colorbar(im) for im in inp_ims]
-            ds_ims = [axs[k + 3].imshow(activation(ds.state[k][-1]), cmap=cmap) for k in range(3)]
+            # inp_ims = [axs[k].imshow(activation(inp.state[k][-1]), cmap=cmap) for k in range(3)]
+            # inp_cbars = [plt.colorbar(im) for im in inp_ims]
+            ds_ims = [axs[k].imshow(activation(ds.state[k][-1]), cmap=cmap) for k in range(3)]
             ds_cbars = [plt.colorbar(im) for im in ds_ims]
-            ker_im = axs[6].imshow(ker)
+            ker_im = axs[3].imshow(ker)
             ker_cbar = plt.colorbar(ker_im)
 
-            log_im = axs[7].imshow(log.reshape(ksize, ksize))
-            log_cbar = plt.colorbar(log_im)
+            lap_im = axs[4].imshow(lap.reshape(ksize, ksize))
+            lap_cbar = plt.colorbar(lap_im)
 
 
             ## set up animation
             def draw_func(frame):
                 nonlocal ker
                 t, can = frame
-                for k, (im, cbar) in enumerate(zip(inp_ims, inp_cbars)):
-                    x = activation(inp.state[k][-1])
-                    im.set_data(x)
-                    im.set_clim(x.min(), x.max())
-                    cbar.update_normal(im)
-                    # im.set_clim(-2, 2)
+                # for k, (im, cbar) in enumerate(zip(inp_ims, inp_cbars)):
+                #     x = activation(inp.state[k][-1])
+                #     im.set_data(x)
+                #     im.set_clim(x.min(), x.max())
+                #     cbar.update_normal(im)
+                #     # im.set_clim(-2, 2)
 
                 for k, (im, cbar) in enumerate(zip(ds_ims, ds_cbars)):
                     x = activation(ds.state[k][-1])
@@ -154,11 +167,9 @@ def main(args):
                 ker_im.set_clim(ker.min(), ker.max())
                 ker_cbar.update_normal(ker_im)
 
-                log_im.set_data(log.reshape(ksize, ksize))
-                log_im.set_clim(log.min(), log.max())
-                log_cbar.update_normal(log_im)
-
-
+                lap_im.set_data(lap.reshape(ksize, ksize))
+                lap_im.set_clim(lap.min(), lap.max())
+                lap_cbar.update_normal(lap_im)
 
                 fig.suptitle(str(t))
                 return ds_ims
@@ -202,6 +213,38 @@ def main(args):
             ksize_slider = Slider(fig.add_axes((0.2, 0.15, 0.65, 0.03)), label='ksize', valmin=1, valmax=20, valstep=1, valinit=ksize)
             ksize_slider.on_changed(update_ksize)
 
+            def update_s11(x):
+                nonlocal s11
+                s11 = x
+            s11_slider = Slider(fig.add_axes((0.2, 0.18, 0.65, 0.03)), label='s11', valmin=sigma_min, valmax=sigma_max, valinit=s11)
+            s11_slider.on_changed(update_s11)
+
+            def update_s12(x):
+                nonlocal s12
+                s12 = x
+            s12_slider = Slider(fig.add_axes((0.2, 0.21, 0.65, 0.03)), label='s12', valmin=sigma_min, valmax=sigma_max, valinit=s12)
+            s12_slider.on_changed(update_s12)
+
+
+            def update_H(x):
+                nonlocal H
+                H = x
+            H_slider = Slider(fig.add_axes((0.2, 0.24, 0.65, 0.03)), label='H', valmin=10, valmax=args.hmax, valstep=1, valinit=H)
+            H_slider.on_changed(update_H)
+
+
+            def update_W(x):
+                nonlocal W
+                W = x
+            W_slider = Slider(fig.add_axes((0.2, 0.27, 0.65, 0.03)), label='W', valmin=10, valmax=args.wmax, valstep=1, valinit=W)
+            W_slider.on_changed(update_W)
+
+
+
+
+
+
+
 
 
             plt.show()
@@ -220,6 +263,9 @@ if __name__ == '__main__':
     parser.add_argument('-W', required=True, type=int)
     parser.add_argument('-K', required=True, type=int)
     parser.add_argument('-C', required=True, type=int)
+
+    parser.add_argument('-wmax', default=300, required=False, type=int)
+    parser.add_argument('-hmax', default=300, required=False, type=int)
 
     args = parser.parse_args()
 

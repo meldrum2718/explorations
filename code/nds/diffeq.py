@@ -40,6 +40,12 @@ class DynSys:
                 self.state[k] = self.state[k].roll(shifts=(-1,), dims=(0,))
                 self.state[k][-1] = self.state[k-1][-1] - self.state[k-1][-2]
 
+    def resize(self, h, w):
+        resized = DynSys(h, w, self.C, self.K)
+        for k in range(self.K + 1):
+            resized.state[k] = F.interpolate(self.state[k].permute(0, 3, 1, 2), size=(h, w), mode='bilinear', antialias='true').permute(0, 2, 3, 1) 
+        return resized
+
 
 Dx = torch.tensor([-1, 1]).reshape(1, 1, -1).to(torch.float32)
 D2x = F.conv1d(Dx, Dx.flip(-1), padding=1).unsqueeze(0)
