@@ -57,8 +57,8 @@ def main(args):
 
                         L = 0
                         cur_state = ds.state[L][-1]
-                        dxdt = 0.1 * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
-                        ds.step(dxdt, L=L+1)
+                        dxdt = 0.4 * laplacian(cur_state.unsqueeze(0).permute(0, 3, 1, 2)).permute(0, 2, 3, 1).squeeze(0)
+                        ds.step(dxdt, L=L+2)
 
                     yield t, ds
 
