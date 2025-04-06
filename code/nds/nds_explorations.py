@@ -264,8 +264,8 @@ if __name__ == '__main__':
     parser.add_argument('-K', required=True, type=int)
     parser.add_argument('-C', required=True, type=int)
 
-    parser.add_argument('-wmax', default=300, required=False, type=int)
-    parser.add_argument('-hmax', default=300, required=False, type=int)
+    parser.add_argument('-wmax', default=1000, required=False, type=int)
+    parser.add_argument('-hmax', default=1000, required=False, type=int)
 
     args = parser.parse_args()
 
