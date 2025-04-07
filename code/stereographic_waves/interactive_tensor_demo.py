@@ -3,17 +3,19 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 from matplotlib.animation import FuncAnimation
+from matplotlib.gridspec import GridSpec
 
 # Import the stereographic projection code
 from stereographic_projection import warp, rotation_x, rotation_y, rotation_z
 
-# Import the tensor wave simulation
+# Import the modified tensor wave simulation
 from tensor_wave_simulation import TensorWaveSimulation, wave_tensor_field
 
 def interactive_tensor_wave_demo():
     """
     Interactive demo combining tensor-based wave equation simulation with stereographic projection.
     Wave propagation happens directly on the density field using tensor operations.
+    Refactored to allow multiple stereographic projections on the state.
     """
     # Enable PyTorch's default tensor type to be float32
     torch.set_default_dtype(torch.float32)
@@ -30,15 +32,18 @@ def interactive_tensor_wave_demo():
     fig = plt.figure(figsize=(15, 8))
     
     # Layout with gridspec
-    from matplotlib.gridspec import GridSpec
-    gs = GridSpec(2, 2, height_ratios=[4, 1])
+    gs = GridSpec(2, 1, height_ratios=[3, 1])
     
-    # Two main visualization panels
-    ax_density = fig.add_subplot(gs[0, 0])  # Density field with wave
-    ax_projection = fig.add_subplot(gs[0, 1])  # Stereographic projection
+    # Create a subplot for the visualization panels
+    vis_panel = fig.add_subplot(gs[0])
+    vis_panel.axis('off')  # Turn off axes for the container
+    
+    # Create axes within the visualization panel
+    ax_density = plt.axes([0.1, 0.35, 0.35, 0.55])  # Density field with wave
+    ax_projection = plt.axes([0.55, 0.35, 0.35, 0.55])  # Stereographic projection
     
     # Control panel at bottom
-    ax_controls = fig.add_subplot(gs[1, :])
+    ax_controls = fig.add_subplot(gs[1])
     ax_controls.axis('off')
     
     # Setup visualization initial state
@@ -68,18 +73,19 @@ def interactive_tensor_wave_demo():
     # Add colorbar for projection
     projection_cbar = fig.colorbar(projection_img, ax=ax_projection, shrink=0.8)
     
-    # Create sliders for rotation - centered around zero
-    slider_ax_x = plt.axes([0.1, 0.15, 0.8, 0.03])
-    slider_ax_y = plt.axes([0.1, 0.1, 0.8, 0.03])
-    slider_ax_z = plt.axes([0.1, 0.05, 0.8, 0.03])
+    # Create sliders in the controls section (at the bottom of the figure)
+    # Rotation sliders
+    slider_ax_x = plt.axes([0.1, 0.25, 0.8, 0.03])
+    slider_ax_y = plt.axes([0.1, 0.20, 0.8, 0.03])
+    slider_ax_z = plt.axes([0.1, 0.15, 0.8, 0.03])
     
-    # Add wave speed and stereo weight sliders
-    slider_wave_speed_ax = plt.axes([0.1, 0.20, 0.3, 0.03])
-    slider_stereo_ax = plt.axes([0.6, 0.20, 0.3, 0.03])
+    # Wave speed and stereo weight sliders
+    slider_wave_speed_ax = plt.axes([0.1, 0.10, 0.35, 0.03])
+    slider_stereo_ax = plt.axes([0.55, 0.10, 0.35, 0.03])
     
-    # Add radius and domain sliders
-    slider_radius_ax = plt.axes([0.1, 0.25, 0.3, 0.03])
-    slider_domain_ax = plt.axes([0.6, 0.25, 0.3, 0.03])
+    # Radius and domain sliders
+    slider_radius_ax = plt.axes([0.1, 0.05, 0.35, 0.03])
+    slider_domain_ax = plt.axes([0.55, 0.05, 0.35, 0.03])
     
     # Center all sliders around zero with smaller range
     slider_x = Slider(slider_ax_x, 'X Rotation', -0.5, 0.5, valinit=0)
@@ -88,17 +94,17 @@ def interactive_tensor_wave_demo():
     
     # Create wave speed and stereo weight sliders
     slider_wave_speed = Slider(slider_wave_speed_ax, 'Wave Speed', 0.0, 2.0, valinit=0.0)
-    slider_stereo = Slider(slider_stereo_ax, 'Stereo Weight', 0.0, 0.01, valinit=0.0)
+    slider_stereo = Slider(slider_stereo_ax, 'Stereo Weight', 0.0, 1.00, valinit=0.0)
     
     # Create radius and domain sliders
     slider_radius = Slider(slider_radius_ax, 'Radius', 0.01, 10.0, valinit=r)
     slider_domain = Slider(slider_domain_ax, 'Domain Size', 1.0, 10.0, valinit=domain[1])
     
-    # Create buttons for controls - position them at the bottom
-    btn_reset_ax = plt.axes([0.1, 0.35, 0.3, 0.05])
+    # Create buttons for controls - position them above the sliders
+    btn_reset_ax = plt.axes([0.3, 0.30, 0.15, 0.05])
     btn_reset = Button(btn_reset_ax, 'Reset Wave')
     
-    btn_anim_ax = plt.axes([0.6, 0.35, 0.3, 0.05])
+    btn_anim_ax = plt.axes([0.55, 0.30, 0.15, 0.05])
     btn_anim = Button(btn_anim_ax, 'Start Wave Propagation')
     
     # Animation state
@@ -125,7 +131,8 @@ def interactive_tensor_wave_demo():
         sim.set_rotation_matrix(Rot)
         
         # Apply warp function with current sampling function
-        projection = warp(sample_density, slider_radius.val, Rot, resolution=resolution, domain=(-slider_domain.val, slider_domain.val))
+        projection = warp(sample_density, slider_radius.val, Rot, 
+                         resolution=resolution, domain=(-slider_domain.val, slider_domain.val))
         
         # Update image
         projection_img.set_data(projection)
@@ -152,7 +159,8 @@ def interactive_tensor_wave_demo():
         Rot = np.dot(rotation_z(slider_z.val), 
                     np.dot(rotation_y(slider_y.val), rotation_x(slider_x.val)))
                     
-        projection = warp(sample_density, slider_radius.val, Rot, resolution=resolution, domain=domain)
+        projection = warp(sample_density, slider_radius.val, Rot, 
+                         resolution=resolution, domain=domain)
         projection_img.set_data(projection)
         
         fig.canvas.draw_idle()
@@ -160,14 +168,23 @@ def interactive_tensor_wave_demo():
     def update_radius(_):
         """Update radius parameter for stereographic projection"""
         nonlocal projection
+        # Update simulation radius
+        sim.set_radius(slider_radius.val)
+        
         # Update projection with new radius
         Rot = np.dot(rotation_z(slider_z.val), 
                     np.dot(rotation_y(slider_y.val), rotation_x(slider_x.val)))
                     
-        projection = warp(sample_density, slider_radius.val, Rot, resolution=resolution, domain=domain)
+        projection = warp(sample_density, slider_radius.val, Rot, 
+                         resolution=resolution, domain=domain)
         projection_img.set_data(projection)
         
         fig.canvas.draw_idle()
+    
+    def update_wave_params(_):
+        """Update wave speed and stereo weight from sliders"""
+        sim.c = slider_wave_speed.val
+        sim.set_stereo_weight(slider_stereo.val)
     
     def on_reset(_):
         """Reset the wave simulation to initial state"""
@@ -184,7 +201,7 @@ def interactive_tensor_wave_demo():
         fig.canvas.draw_idle()
     
     def on_animation(event):
-        """Start/stop the wave propagation animation"""
+        """Start/stop the wave propagation animation with external stereographic projection"""
         nonlocal anim, rotating
         
         if anim is not None:
@@ -211,9 +228,35 @@ def interactive_tensor_wave_demo():
         
         # Animation update function
         def update_frame(frame):
-            # Update wave simulation multiple times per frame for faster animation
-            for _ in range(3):  # Perform multiple simulation steps per frame
-                density_field = sim.step()
+            # Get current and previous state
+            u_curr = sim.u[0]
+            u_prev = sim.u[1]
+            
+            # Get current parameters
+            dt = sim.dt
+            c = slider_wave_speed.val
+            damping = sim.damping
+            
+            # Get rotation matrix
+            ax_angle = slider_x.val
+            ay_angle = slider_y.val
+            az_angle = slider_z.val
+            Rot = np.dot(rotation_z(az_angle), 
+                         np.dot(rotation_y(ay_angle), rotation_x(ax_angle)))
+            
+            # Update parameters from sliders
+            sim.set_radius(slider_radius.val)
+            
+            # Compute acceleration with the current stereo parameters
+            # This lets us apply stereographic projection directly in the dynamics
+            acceleration, u_blended = sim.compute_acceleration(
+                u_curr, u_prev, dt, c, damping, 
+                stereo_weight=slider_stereo.val,
+                rotation_matrix=Rot
+            )
+            
+            # Step the simulation with the computed acceleration
+            density_field = sim.step(external_acceleration=None)
             
             # Update density display
             density_img.set_data(density_field)
@@ -224,18 +267,6 @@ def interactive_tensor_wave_demo():
             density_img.set_clim(vmin, vmax)
             
             if rotating:
-                # Calculate rotation angles directly from sliders (no animation for rotation)
-                ax_angle = slider_x.val
-                ay_angle = slider_y.val
-                az_angle = slider_z.val
-                
-                # Calculate rotation matrix directly without updating sliders
-                Rot = np.dot(rotation_z(az_angle), 
-                            np.dot(rotation_y(ay_angle), rotation_x(ax_angle)))
-                
-                # Set the rotation matrix in the simulation for stereographic blending
-                sim.set_rotation_matrix(Rot)
-                
                 # Apply warp function with current sampling function using current radius and domain
                 projection = warp(sample_density, slider_radius.val, Rot, 
                                  resolution=resolution, domain=(-slider_domain.val, slider_domain.val))
@@ -245,30 +276,33 @@ def interactive_tensor_wave_demo():
             
             return density_img, projection_img
         
-        # Create animation with save_count=1 to suppress warnings
-        anim = FuncAnimation(fig, update_frame, frames=frame_generator(), 
-                            interval=50, blit=True, save_count=1, cache_frame_data=False)
-    
-    # Wave parameter update function
-    def update_wave_params(_):
-        """Update wave speed and stereo weight from sliders"""
-        sim.c = slider_wave_speed.val
-        sim.set_stereo_weight(slider_stereo.val)
-    
-    # Connect callbacks
+        # Create animation with save_count=1 to avoid excessive buffer
+        anim = FuncAnimation(fig, update_frame, frames=frame_generator, interval=50, blit=True, save_count=1)
+        
+    # Connect callbacks to UI elements
     slider_x.on_changed(update_rotation)
     slider_y.on_changed(update_rotation)
     slider_z.on_changed(update_rotation)
+    
     slider_wave_speed.on_changed(update_wave_params)
     slider_stereo.on_changed(update_wave_params)
+    
     slider_radius.on_changed(update_radius)
     slider_domain.on_changed(update_domain)
+    
     btn_reset.on_clicked(on_reset)
     btn_anim.on_clicked(on_animation)
     
-    # Use subplots_adjust instead of tight_layout to avoid warnings
-    plt.subplots_adjust(bottom=0.3, left=0.05, right=0.95, top=0.95)
+    # Final layout adjustments - remove tight_layout() which is causing warnings
+    # with custom positioned axes
+    
+    # Initial visualization setup
+    on_reset(None)  # Initialize with a pulse
+    
     plt.show()
+    
+    return fig, sim
 
+# Add this to actually run the demo when the script is executed
 if __name__ == "__main__":
     interactive_tensor_wave_demo()

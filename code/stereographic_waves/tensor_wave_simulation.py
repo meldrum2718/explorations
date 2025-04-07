@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 class TensorWaveSimulation:
     """
     Simulates a wave equation using tensors, working directly with the density field.
-    Uses a simple finite difference scheme to solve the wave equation.
+    Refactored to separate the dynamics calculation from the step function.
     """
     
     def __init__(self, resolution=100, domain=(-5, 5), dt=0.1, c=0.8, damping=0.005):
@@ -50,6 +50,20 @@ class TensorWaveSimulation:
         self.r = 1.0  # Radius parameter
         
         # Precompute coordinate grids for the stereographic projection
+        self.create_stereo_grids()
+    
+    def set_radius(self, radius):
+        """
+        Set the radius parameter for stereographic projection.
+        
+        Parameters:
+        -----------
+        radius : float
+            Radius parameter for stereographic projection
+        """
+        self.r = radius
+        
+        # Update the stereo grids with the new radius
         self.create_stereo_grids()
     
     def create_stereo_grids(self):
@@ -112,7 +126,7 @@ class TensorWaveSimulation:
         # 5-point stencil laplacian
         return (left + right + top + bottom - 4 * center).squeeze()
     
-    def apply_stereographic_projection(self, u, rotation_matrix=None):
+    def apply_stereographic_projection(self, u, radius=None, rotation_matrix=None):
         """
         Apply stereographic projection to a field and return it.
         
@@ -120,7 +134,9 @@ class TensorWaveSimulation:
         -----------
         u : torch.Tensor
             Input tensor of shape [H, W]
-        rotation_matrix : numpy.ndarray
+        radius : float, optional
+            Radius parameter for stereographic projection. If None, use self.r
+        rotation_matrix : numpy.ndarray, optional
             3x3 rotation matrix to apply to the points on the sphere
             
         Returns:
@@ -128,6 +144,9 @@ class TensorWaveSimulation:
         torch.Tensor
             Field after stereographic projection and back-projection
         """
+        # Use provided radius or default
+        radius = radius if radius is not None else self.r
+        
         # Get original grid coordinates
         y, x = torch.meshgrid(
             torch.linspace(self.domain[0], self.domain[1], self.resolution),
@@ -137,11 +156,11 @@ class TensorWaveSimulation:
         
         # Step 1: Map each point (x,y) to a point on the sphere
         r_sq = x**2 + y**2
-        denom = r_sq + self.r**2
+        denom = r_sq + radius**2
         
-        X_sphere = 2 * self.r**2 * x / denom
-        Y_sphere = 2 * self.r**2 * y / denom
-        Z_sphere = self.r * (r_sq - self.r**2) / denom
+        X_sphere = 2 * radius**2 * x / denom
+        Y_sphere = 2 * radius**2 * y / denom
+        Z_sphere = radius * (r_sq - radius**2) / denom
         
         # Step 2: Apply rotation if provided
         if rotation_matrix is not None:
@@ -206,32 +225,45 @@ class TensorWaveSimulation:
             Values in between blend the two fields
         """
         self.stereo_weight = weight
-
-
     
-    def step(self):
+    def compute_acceleration(self, u_curr, u_prev, dt, c, damping, stereo_weight=None, rotation_matrix=None):
         """
-        Advance simulation by one time step using wave equation.
+        Compute the acceleration term (second time derivative) for the wave equation.
+        Now separated from the step function to allow external modifications.
         
-        The wave equation: ∂²u/∂t² = c² ∇²u - d ∂u/∂t
-        where c is the wave speed and d is the damping coefficient.
-        
+        Parameters:
+        -----------
+        u_curr : torch.Tensor
+            Current state of the field
+        u_prev : torch.Tensor
+            Previous state of the field
+        dt : float
+            Time step
+        c : float
+            Wave speed
+        damping : float
+            Damping coefficient
+        stereo_weight : float, optional
+            Weight for stereographic projection blending
+        rotation_matrix : numpy.ndarray, optional
+            Rotation matrix for stereographic projection
+            
         Returns:
         --------
-        numpy.ndarray
-            Updated density field
+        torch.Tensor
+            Acceleration term
         """
-        # Get current and previous state
-        u_curr = self.u[0]
-        u_prev = self.u[1]
+        # Use provided parameters or defaults
+        stereo_weight = stereo_weight if stereo_weight is not None else self.stereo_weight
+        rotation_matrix = rotation_matrix if rotation_matrix is not None else self.rotation_matrix
         
         # Apply stereographic projection if needed
-        if self.stereo_weight > 0:
+        if stereo_weight > 0:
             # Get stereographically projected version of the current field
-            u_stereo = self.apply_stereographic_projection(u_curr, self.rotation_matrix)
+            u_stereo = self.apply_stereographic_projection(u_curr, rotation_matrix=rotation_matrix)
             
             # Blend the original field with its stereographic projection
-            u_blended = (1 - self.stereo_weight) * u_curr + self.stereo_weight * u_stereo
+            u_blended = (1 - stereo_weight) * u_curr + stereo_weight * u_stereo
         else:
             # No blending needed
             u_blended = u_curr
@@ -246,19 +278,53 @@ class TensorWaveSimulation:
         lapl_abs = torch.abs(lapl)
         lapl_normalized = lapl_sign * torch.minimum(lapl_abs, torch.tensor(max_lapl_value))
         
-        # Wave equation discretization with damping
-        # u_next = 2*u_curr - u_prev + c²*dt²*∇²u - d*dt*(u_curr - u_prev)
-        dt_sq = self.dt * self.dt
+        # Compute the acceleration term from the wave equation
+        # a = c²*∇²u - d*v
+        # where v = (u_curr - u_prev)/dt is the velocity
         
         # Use a higher coefficient for the Laplacian to make waves propagate faster
-        laplacian_factor = self.c * self.c * dt_sq
+        laplacian_factor = c * c
+        velocity = (u_blended - u_prev) / dt
         
-        u_next = (
-            2 * u_blended 
-            - u_prev 
-            + laplacian_factor * lapl_normalized
-            - self.damping * self.dt * (u_blended - u_prev)
+        # Acceleration = c²*∇²u - d*v
+        acceleration = laplacian_factor * lapl_normalized - damping * velocity
+        
+        return acceleration, u_blended
+    
+    def step(self, external_acceleration=None):
+        """
+        Advance simulation by one time step using wave equation.
+        Optionally accepts external acceleration term.
+        
+        Parameters:
+        -----------
+        external_acceleration : torch.Tensor, optional
+            External acceleration to add to the computed acceleration
+            
+        Returns:
+        --------
+        numpy.ndarray
+            Updated density field
+        """
+        # Get current and previous state
+        u_curr = self.u[0]
+        u_prev = self.u[1]
+        
+        # Compute acceleration
+        acceleration, u_blended = self.compute_acceleration(
+            u_curr, u_prev, self.dt, self.c, self.damping, 
+            self.stereo_weight, self.rotation_matrix
         )
+        
+        # Add external acceleration if provided
+        if external_acceleration is not None:
+            acceleration = acceleration + external_acceleration
+        
+        # Wave equation discretization with explicit scheme
+        # u_next = 2*u_curr - u_prev + dt²*acceleration
+        dt_sq = self.dt * self.dt
+        
+        u_next = 2 * u_blended - u_prev + dt_sq * acceleration
         
         # Apply normalization to keep the wave amplitude in check
         # This prevents numerical instability from amplitudes growing too large
@@ -273,13 +339,6 @@ class TensorWaveSimulation:
             if energy > max_energy:
                 scaling_factor = torch.sqrt(max_energy / energy)
                 u_next = u_next * scaling_factor
-        
-        # Update state history
-        self.u[1] = u_curr.clone()  # Previous becomes current
-        self.u[0] = u_next.clone()  # Current becomes next
-        
-        # Convert to numpy for visualization
-        return self.u[0].cpu().detach().numpy()
         
         # Update state history
         self.u[1] = u_curr.clone()  # Previous becomes current
