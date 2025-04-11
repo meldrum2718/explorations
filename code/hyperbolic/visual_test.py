@@ -1,3 +1,8 @@
+"""
+TODO make this code more general (i.e. arbitrary nd stereographic proj)
+move technical methods to projections.py, have this file just for vis
+"""
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -96,9 +101,51 @@ def warp_with_rotation(points, r, Rot):
     return result
 
 
-def apply_sequence_to_function(function, grid_x, grid_y, r, rotation_matrix):
+def apply_sequence_to_function(function, grid_x, grid_y, r, rotation_matrix, eccentricity, c_factor):
     """
     Apply the projection sequence to a function and evaluate it on the grid.
+    
+    Parameters:
+    -----------
+    function : callable
+        Function that maps R^2 -> R
+    grid_x, grid_y : numpy.ndarray
+        Grid arrays for x and y dimensions
+    r : float
+        Radius parameter
+    rotation_matrix : numpy.ndarray
+        3x3 rotation matrix
+    eccentricity : float
+        Scaling factor for sphere coordinates
+    c_factor : float
+        Factor to scale the center point
+    
+    Returns:
+    --------
+    numpy.ndarray
+        Function values on the transformed grid
+    """
+    # Create grid of coordinates (resolution x resolution, 2)
+    grid_coords = np.stack(np.meshgrid(grid_x, grid_y, indexing='ij'), axis=-1).reshape(-1, 2)
+    
+    # Apply the sequence
+    points_torch = torch.tensor(grid_coords, dtype=torch.float32)
+    flat_points = ball_to_flat(points_torch, eccentricity, c_factor).numpy()
+    warped_points = warp_with_rotation(flat_points, r, rotation_matrix)
+    warped_points_torch = torch.tensor(warped_points, dtype=torch.float32)
+    transformed_coords = flat_to_ball(warped_points_torch, eccentricity, c_factor).numpy()
+
+    # Reshape back to grid
+    tx = warped_points[:, 0].reshape(len(grid_x), len(grid_y))
+    ty = warped_points[:, 1].reshape(len(grid_x), len(grid_y))
+    
+    # Evaluate function on transformed coordinates
+    return function(tx, ty)
+
+def apply_direct_warp(function, grid_x, grid_y, r, rotation_matrix):
+    """
+    Apply only warp_with_rotation to a function and evaluate it on the grid.
+    Skip the ball_to_flat transformation but still do flat_to_ball at the end.
     
     Parameters:
     -----------
@@ -119,13 +166,9 @@ def apply_sequence_to_function(function, grid_x, grid_y, r, rotation_matrix):
     # Create grid of coordinates (resolution x resolution, 2)
     grid_coords = np.stack(np.meshgrid(grid_x, grid_y, indexing='ij'), axis=-1).reshape(-1, 2)
     
-    # Apply the sequence
-    points_torch = torch.tensor(grid_coords, dtype=torch.float32)
-    flat_points = ball_to_flat(points_torch).numpy()
-    warped_points = warp_with_rotation(flat_points, r, rotation_matrix)
-    warped_points_torch = torch.tensor(warped_points, dtype=torch.float32)
-    transformed_coords = flat_to_ball(warped_points_torch).numpy()
-
+    # Apply only the warp_with_rotation
+    warped_points = warp_with_rotation(grid_coords, r, rotation_matrix)
+    
     # Reshape back to grid
     tx = warped_points[:, 0].reshape(len(grid_x), len(grid_y))
     ty = warped_points[:, 1].reshape(len(grid_x), len(grid_y))
@@ -171,13 +214,15 @@ def main():
     
     # Set up grid parameters
     resolution = 250
-    x_min_init, x_max_init = -2, 2
-    y_min_init, y_max_init = -2, 2
+    x_max_init = 2  # Initial half-width
+    y_max_init = 2  # Initial half-height
     r_init = 2.0  # Initial radius
+    eccentricity_init = 3.0  # Initial eccentricity
+    c_factor_init = 1.34  # Initial c_factor
     
-    # Initial grid
-    x = np.linspace(x_min_init, x_max_init, resolution)
-    y = np.linspace(y_min_init, y_max_init, resolution)
+    # Initial grid (symmetric around zero)
+    x = np.linspace(-x_max_init, x_max_init, resolution)
+    y = np.linspace(-y_max_init, y_max_init, resolution)
     X, Y = np.meshgrid(x, y, indexing='ij')
     
     # Initial rotation angles (in radians)
@@ -192,58 +237,71 @@ def main():
     current_function_name = 'complex_periodic'
     current_function = function_dict[current_function_name]
     
-    # Create a figure with two subplots
-    fig, axs = plt.subplots(1, 2, figsize=(14, 7))
+    # Create a figure with three subplots
+    fig, axs = plt.subplots(1, 3, figsize=(18, 7))
     
     # Original function display
     original_im = axs[0].imshow(current_function(X, Y), origin='lower', 
-                               extent=[x_min_init, x_max_init, y_min_init, y_max_init],
+                               extent=[-x_max_init, x_max_init, -y_max_init, y_max_init],
                                cmap='viridis')
     axs[0].set_title('Original Function')
     axs[0].set_xlabel('x')
     axs[0].set_ylabel('y')
     fig.colorbar(original_im, ax=axs[0])
     
-    # Transformed function display
-    transformed_data = apply_sequence_to_function(
+    # Direct warp function display (new plot)
+    direct_warp_data = apply_direct_warp(
         current_function, x, y, r_init, rotation_matrix
     )
-    transformed_im = axs[1].imshow(transformed_data, origin='lower', 
-                                  extent=[x_min_init, x_max_init, y_min_init, y_max_init],
+    direct_warp_im = axs[1].imshow(direct_warp_data, origin='lower', 
+                                  extent=[-x_max_init, x_max_init, -y_max_init, y_max_init],
                                   cmap='viridis')
-    axs[1].set_title('Transformed: ball-to-flat → warp → flat-to-ball')
+    axs[1].set_title('Direct Warp (Stereographic only)')
     axs[1].set_xlabel('x')
     axs[1].set_ylabel('y')
-    fig.colorbar(transformed_im, ax=axs[1])
+    fig.colorbar(direct_warp_im, ax=axs[1])
+    
+    # Full transformed function display
+    transformed_data = apply_sequence_to_function(
+        current_function, x, y, r_init, rotation_matrix, eccentricity_init, c_factor_init
+    )
+    transformed_im = axs[2].imshow(transformed_data, origin='lower', 
+                                  extent=[-x_max_init, x_max_init, -y_max_init, y_max_init],
+                                  cmap='viridis')
+    axs[2].set_title('Full Transform: ball-to-flat → warp → flat-to-ball')
+    axs[2].set_xlabel('x')
+    axs[2].set_ylabel('y')
+    fig.colorbar(transformed_im, ax=axs[2])
     
     # Add circles to show boundary
-    circle_radius = r_init
-    circle1 = plt.Circle((0, 0), circle_radius, fill=False, color='red', linestyle='--')
-    circle2 = plt.Circle((0, 0), circle_radius, fill=False, color='red', linestyle='--')
+    circle1 = plt.Circle((0, 0), r_init, fill=False, color='red', linestyle='--')
+    circle2 = plt.Circle((0, 0), r_init, fill=False, color='red', linestyle='--')
+    circle3 = plt.Circle((0, 0), r_init, fill=False, color='red', linestyle='--')
     axs[0].add_patch(circle1)
     axs[1].add_patch(circle2)
+    axs[2].add_patch(circle3)
     
     # Adjust the layout to make room for sliders
-    plt.subplots_adjust(bottom=0.4)
+    plt.subplots_adjust(bottom=0.55)  # Increased bottom margin to accommodate sliders
     
     # Add sliders for parameters
-    ax_radius = plt.axes([0.25, 0.35, 0.65, 0.03])
-    ax_theta_x = plt.axes([0.25, 0.30, 0.65, 0.03])
-    ax_theta_y = plt.axes([0.25, 0.25, 0.65, 0.03])
-    ax_theta_z = plt.axes([0.25, 0.20, 0.65, 0.03])
-    ax_x_min = plt.axes([0.25, 0.15, 0.65, 0.03])
-    ax_x_max = plt.axes([0.25, 0.10, 0.65, 0.03])
-    ax_y_min = plt.axes([0.25, 0.05, 0.65, 0.03])
-    ax_y_max = plt.axes([0.25, 0.00, 0.65, 0.03])
+    ax_radius = plt.axes([0.25, 0.45, 0.65, 0.03])
+    ax_theta_x = plt.axes([0.25, 0.40, 0.65, 0.03])
+    ax_theta_y = plt.axes([0.25, 0.35, 0.65, 0.03])
+    ax_theta_z = plt.axes([0.25, 0.30, 0.65, 0.03])
+    ax_x_max = plt.axes([0.25, 0.25, 0.65, 0.03])  # Width control (x_max)
+    ax_y_max = plt.axes([0.25, 0.20, 0.65, 0.03])  # Height control (y_max)
+    ax_eccentricity = plt.axes([0.25, 0.15, 0.65, 0.03])  # Moved up
+    ax_c_factor = plt.axes([0.25, 0.10, 0.65, 0.03])  # Moved up
     
-    slider_radius = Slider(ax_radius, 'Radius', 0.005, 50.0, valinit=r_init)
+    slider_radius = Slider(ax_radius, 'Radius', 0.005, 100.0, valinit=r_init)
     slider_theta_x = Slider(ax_theta_x, 'X Rotation', -np.pi, np.pi, valinit=theta_x_init, valstep=0.05)
     slider_theta_y = Slider(ax_theta_y, 'Y Rotation', -np.pi, np.pi, valinit=theta_y_init, valstep=0.05)
     slider_theta_z = Slider(ax_theta_z, 'Z Rotation', -np.pi, np.pi, valinit=theta_z_init, valstep=0.05)
-    slider_x_min = Slider(ax_x_min, 'X Min', -10.0, 0.0, valinit=x_min_init, valstep=0.5)
-    slider_x_max = Slider(ax_x_max, 'X Max', 0.0, 10.0, valinit=x_max_init, valstep=0.5)
-    slider_y_min = Slider(ax_y_min, 'Y Min', -10.0, 0.0, valinit=y_min_init, valstep=0.5)
-    slider_y_max = Slider(ax_y_max, 'Y Max', 0.0, 10.0, valinit=y_max_init, valstep=0.5)
+    slider_x_max = Slider(ax_x_max, 'Width', 0.1, 10.0, valinit=x_max_init, valstep=0.1)
+    slider_y_max = Slider(ax_y_max, 'Height', 0.1, 10.0, valinit=y_max_init, valstep=0.1)
+    slider_eccentricity = Slider(ax_eccentricity, 'Eccentricity', 0.1, 10.0, valinit=eccentricity_init, valstep=0.1)
+    slider_c_factor = Slider(ax_c_factor, 'C Factor', 0.1, 5.0, valinit=c_factor_init, valstep=0.05)
     
     # Create radio buttons for function selection
     ax_func = plt.axes([0.025, 0.05, 0.15, 0.15])
@@ -255,10 +313,10 @@ def main():
         theta_x = slider_theta_x.val
         theta_y = slider_theta_y.val
         theta_z = slider_theta_z.val
-        x_min = slider_x_min.val
         x_max = slider_x_max.val
-        y_min = slider_y_min.val
         y_max = slider_y_max.val
+        eccentricity = slider_eccentricity.val
+        c_factor = slider_c_factor.val
         
         # Update rotation matrix
         rotation_matrix = create_rotation_matrix(theta_x, theta_y, theta_z)
@@ -266,32 +324,43 @@ def main():
         # Update circle radius
         circle1.set_radius(r)
         circle2.set_radius(r)
+        circle3.set_radius(r)
         
-        # Update grid
-        x = np.linspace(x_min, x_max, resolution)
-        y = np.linspace(y_min, y_max, resolution)
+        # Update grid (symmetric around zero)
+        x = np.linspace(-x_max, x_max, resolution)
+        y = np.linspace(-y_max, y_max, resolution)
         X, Y = np.meshgrid(x, y, indexing='ij')
         
         # Update original function display
         original_func_data = current_function(X, Y)
         original_im.set_array(original_func_data)
-        original_im.set_extent([x_min, x_max, y_min, y_max])
+        original_im.set_extent([-x_max, x_max, -y_max, y_max])
         original_im.set_clim(original_func_data.min(), original_func_data.max())
         
-        # Update transformed data
-        transformed_data = apply_sequence_to_function(
+        # Update direct warp data
+        direct_warp_data = apply_direct_warp(
             current_function, x, y, r, rotation_matrix
+        )
+        
+        # Update the direct warp plot
+        direct_warp_im.set_array(direct_warp_data)
+        direct_warp_im.set_extent([-x_max, x_max, -y_max, y_max])
+        direct_warp_im.set_clim(direct_warp_data.min(), direct_warp_data.max())
+        
+        # Update full transformed data with eccentricity and c_factor
+        transformed_data = apply_sequence_to_function(
+            current_function, x, y, r, rotation_matrix, eccentricity, c_factor
         )
         
         # Update the transformed plot
         transformed_im.set_array(transformed_data)
-        transformed_im.set_extent([x_min, x_max, y_min, y_max])
+        transformed_im.set_extent([-x_max, x_max, -y_max, y_max])
         transformed_im.set_clim(transformed_data.min(), transformed_data.max())
         
         # Update axis limits
         for ax in axs:
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_min, y_max)
+            ax.set_xlim(-x_max, x_max)
+            ax.set_ylim(-y_max, y_max)
         
         fig.canvas.draw_idle()
     
@@ -305,14 +374,14 @@ def main():
         theta_x = slider_theta_x.val
         theta_y = slider_theta_y.val
         theta_z = slider_theta_z.val
-        x_min = slider_x_min.val
         x_max = slider_x_max.val
-        y_min = slider_y_min.val
         y_max = slider_y_max.val
+        eccentricity = slider_eccentricity.val
+        c_factor = slider_c_factor.val
         
-        # Update grid
-        x = np.linspace(x_min, x_max, resolution)
-        y = np.linspace(y_min, y_max, resolution)
+        # Update grid (symmetric around zero)
+        x = np.linspace(-x_max, x_max, resolution)
+        y = np.linspace(-y_max, y_max, resolution)
         X, Y = np.meshgrid(x, y, indexing='ij')
         
         # Update original function display
@@ -323,9 +392,18 @@ def main():
         # Update rotation matrix
         rotation_matrix = create_rotation_matrix(theta_x, theta_y, theta_z)
         
-        # Update transformed data
-        transformed_data = apply_sequence_to_function(
+        # Update direct warp data
+        direct_warp_data = apply_direct_warp(
             current_function, x, y, r, rotation_matrix
+        )
+        
+        # Update the direct warp plot
+        direct_warp_im.set_array(direct_warp_data)
+        direct_warp_im.set_clim(direct_warp_data.min(), direct_warp_data.max())
+        
+        # Update full transformed data with eccentricity and c_factor
+        transformed_data = apply_sequence_to_function(
+            current_function, x, y, r, rotation_matrix, eccentricity, c_factor
         )
         
         transformed_im.set_array(transformed_data)
@@ -338,17 +416,15 @@ def main():
     slider_theta_x.on_changed(update)
     slider_theta_y.on_changed(update)
     slider_theta_z.on_changed(update)
-    slider_x_min.on_changed(update)
     slider_x_max.on_changed(update)
-    slider_y_min.on_changed(update)
     slider_y_max.on_changed(update)
+    slider_eccentricity.on_changed(update)
+    slider_c_factor.on_changed(update)
     
-    # Register the update function with the radio buttons
+    # Register the function update callback
     radio.on_clicked(update_function)
-    
-    plt.suptitle('Interactive Visualization of Projection Sequence: ball-to-flat → warp → flat-to-ball', fontsize=14)
-    plt.tight_layout(rect=[0, 0.4, 1, 0.95])
+
     plt.show()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

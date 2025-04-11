@@ -156,7 +156,7 @@ def stereographic_projection_to_flat(x_s: torch.Tensor, c: torch.Tensor, r: floa
     return central_projection_to_flat(x_s, north_pole)
 
 
-def ball_to_flat(x_p: torch.Tensor):
+def ball_to_flat(x_p: torch.Tensor, eccentricity: float = 3.0, c_factor: float = 1.34):
     """
     Maps a point x_p from the unit ball in R^n to R^n via:
     1. Stereographic projection to the unit sphere centered at [0,...,0,1]
@@ -166,6 +166,10 @@ def ball_to_flat(x_p: torch.Tensor):
     -----------
     x_p : torch.Tensor
         Points in the unit ball, shape (batch_size, n)
+    eccentricity : float
+        Scaling factor for all coordinates except the last one (z-coordinate)
+    c_factor : float
+        Factor to scale the center point for the central projection
         
     Returns:
     --------
@@ -179,15 +183,17 @@ def ball_to_flat(x_p: torch.Tensor):
     r = 1.0      # Unit radius
     
     # Step 1: Stereographic projection to sphere
-    sphere_points = stereographic_projection_to_sphere(x_p, c, 1)
-    sphere_points[:, :-1]
+    sphere_points = stereographic_projection_to_sphere(x_p, c, r)
     
-    # Step 2: Central projection to flat space
-    flat_points = central_projection_to_flat(sphere_points, c) ## make this param c be slider controlled
+    # Apply eccentricity scaling to all but the last coordinate
+    sphere_points[:, :-1] *= eccentricity
+    
+    # Step 2: Central projection to flat space with scaled center
+    flat_points = central_projection_to_flat(sphere_points, c_factor * c)
     
     return flat_points
 
-def flat_to_ball(x_f: torch.Tensor):
+def flat_to_ball(x_f: torch.Tensor, eccentricity: float = 3.0, c_factor: float = 1.34):
     """
     Maps a point x_f from R^n to the unit ball in R^n via:
     1. Central projection to the unit hemisphere centered at [0,...,0,1]
@@ -197,6 +203,10 @@ def flat_to_ball(x_f: torch.Tensor):
     -----------
     x_f : torch.Tensor
         Points in flat space, shape (batch_size, n)
+    eccentricity : float
+        Scaling factor that should match the one used in ball_to_flat
+    c_factor : float
+        Factor to scale the center point (should match ball_to_flat)
         
     Returns:
     --------
@@ -210,7 +220,11 @@ def flat_to_ball(x_f: torch.Tensor):
     r = 1.0      # Unit radius
     
     # Step 1: Central projection to hemisphere
-    hemisphere_points = central_projection_to_hemisphere(x_f, c, r)
+    hemisphere_points = central_projection_to_hemisphere(x_f, c_factor * c, r)
+    
+    # Apply inverse eccentricity scaling to all but the last coordinate
+    if eccentricity != 1.0:
+        hemisphere_points[:, :-1] /= eccentricity
     
     # Step 2: Stereographic projection to flat space (maps to the unit ball)
     ball_points = stereographic_projection_to_flat(hemisphere_points, c, r)
