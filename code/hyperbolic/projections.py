@@ -1,7 +1,12 @@
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
+"""
+Generalized N-dimensional stereographic projection functions.
 
+This module provides functions for working with stereographic projections in arbitrary
+dimensions, supporting various transformations between flat space, spheres, and balls.
+It also includes utilities for rotating points in higher-dimensional spaces.
+"""
+
+import torch
 
 def central_projection_to_hemisphere(x_f: torch.Tensor, c: torch.Tensor, r: float):
     """
@@ -155,7 +160,6 @@ def stereographic_projection_to_flat(x_s: torch.Tensor, c: torch.Tensor, r: floa
 
     return central_projection_to_flat(x_s, north_pole)
 
-
 def ball_to_flat(x_p: torch.Tensor, eccentricity: float = 3.0, c_factor: float = 1.34):
     """
     Maps a point x_p from the unit ball in R^n to R^n via:
@@ -230,3 +234,96 @@ def flat_to_ball(x_f: torch.Tensor, eccentricity: float = 3.0, c_factor: float =
     ball_points = stereographic_projection_to_flat(hemisphere_points, c, r)
     
     return ball_points
+
+def create_nd_rotation_matrix(angles, dim):
+    """
+    Create a generalized rotation matrix for n-dimensional space.
+    
+    In n-dimensional space, rotations occur in 2D planes. There are n(n-1)/2 
+    possible planes of rotation in an n-dimensional space. For example:
+    - In 2D: 1 plane (xy)
+    - In 3D: 3 planes (xy, xz, yz)
+    - In 4D: 6 planes (xy, xz, yz, xw, yw, zw)
+    
+    Parameters:
+    -----------
+    angles : list or tensor
+        List of rotation angles (in radians) for each rotation plane.
+        For an n-dimensional space, there are n(n-1)/2 possible rotation planes.
+        The expected order is: [θ_01, θ_02, ..., θ_0(n-1), θ_12, θ_13, ..., θ_(n-2)(n-1)]
+        where θ_ij represents rotation in the plane defined by axes i and j.
+    dim : int
+        The dimensionality of the space.
+    
+    Returns:
+    --------
+    torch.Tensor
+        (dim)x(dim) rotation matrix
+    """
+    # Start with identity matrix
+    rot_matrix = torch.eye(dim)
+    
+    # Convert angles to tensor if not already
+    if not isinstance(angles, torch.Tensor):
+        angles = torch.tensor(angles, dtype=torch.float32)
+    
+    # Apply rotations for each plane
+    angle_idx = 0
+    for i in range(dim-1):
+        for j in range(i+1, dim):
+            if angle_idx < len(angles):
+                # Create a rotation in the i-j plane
+                theta = angles[angle_idx]
+                plane_rot = torch.eye(dim)
+                plane_rot[i, i] = torch.cos(theta)
+                plane_rot[i, j] = -torch.sin(theta)
+                plane_rot[j, i] = torch.sin(theta)
+                plane_rot[j, j] = torch.cos(theta)
+                
+                # Apply this rotation
+                rot_matrix = torch.matmul(plane_rot, rot_matrix)
+                angle_idx += 1
+    
+    return rot_matrix
+
+def warp_with_rotation(points: torch.Tensor, r: float, rotation_matrix: torch.Tensor):
+    """
+    Apply a stereographic-rotation-stereographic sequence to n-dimensional points.
+    
+    Parameters:
+    -----------
+    points : torch.Tensor
+        Points in R^n, shape (n_points, n)
+    r : float
+        Radius parameter for the stereographic projection
+    rotation_matrix : torch.Tensor
+        (n+1)x(n+1) rotation matrix for rotating points on the n-sphere
+        
+    Returns:
+    --------
+    torch.Tensor
+        Transformed points in R^n
+    """
+    # Ensure inputs are torch tensors
+    if not isinstance(points, torch.Tensor):
+        points = torch.tensor(points, dtype=torch.float32)
+    if not isinstance(rotation_matrix, torch.Tensor):
+        rotation_matrix = torch.tensor(rotation_matrix, dtype=torch.float32)
+    
+    n = points.shape[1]  # Dimensionality of input
+    
+    # Step 1: Map each point to a point on the n-sphere using stereographic projection
+    # Set up center point for projection
+    c = torch.zeros(n + 1, device=points.device)
+    c[-1] = 1.0  # Center at [0,...,0,1]
+    
+    # Project points to sphere
+    sphere_points = stereographic_projection_to_sphere(points, c, r)
+    
+    # Step 2: Apply rotation
+    rotated_points = torch.matmul(sphere_points, rotation_matrix.transpose(0, 1))
+    
+    # Step 3: Stereographic projection back to flat space
+    flat_points = stereographic_projection_to_flat(rotated_points, c, r)
+    
+    return flat_points
