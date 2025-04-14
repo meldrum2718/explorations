@@ -1,12 +1,13 @@
 """
-Generalized N-dimensional stereographic projection functions.
+Some functions for working with hyperbolic space.
 
-This module provides functions for working with stereographic projections in arbitrary
-dimensions, supporting various transformations between flat space, spheres, and balls.
+Supporting various transformations between flat space, spheres, and balls.
 It also includes utilities for rotating points in higher-dimensional spaces.
 """
 
 import torch
+import numpy as np
+from scipy.interpolate import LinearNDInterpolator
 
 def central_projection_to_hemisphere(x_f: torch.Tensor, c: torch.Tensor, r: float):
     """
@@ -160,7 +161,7 @@ def stereographic_projection_to_flat(x_s: torch.Tensor, c: torch.Tensor, r: floa
 
     return central_projection_to_flat(x_s, north_pole)
 
-def ball_to_flat(x_p: torch.Tensor, eccentricity: float = 3.0, c_factor: float = 1.34):
+def ball_to_flat(x_p: torch.Tensor, eccentricity: float = 1.0, c_factor: float = 1.34):
     """
     Maps a point x_p from the unit ball in R^n to R^n via:
     1. Stereographic projection to the unit sphere centered at [0,...,0,1]
@@ -242,8 +243,8 @@ def create_nd_rotation_matrix(angles, dim):
     In n-dimensional space, rotations occur in 2D planes. There are n(n-1)/2 
     possible planes of rotation in an n-dimensional space. For example:
     - In 2D: 1 plane (xy)
-    - In 3D: 3 planes (xy, xz, yz)
-    - In 4D: 6 planes (xy, xz, yz, xw, yw, zw)
+    - In 3D: Possible rotation planes: (xy, xz, yz)
+    - In 4D: Possible rotation planes: (xy, xz, yz, xw, yw, zw)
     
     Parameters:
     -----------
@@ -314,16 +315,384 @@ def warp_with_rotation(points: torch.Tensor, r: float, rotation_matrix: torch.Te
     
     # Step 1: Map each point to a point on the n-sphere using stereographic projection
     # Set up center point for projection
-    c = torch.zeros(n + 1, device=points.device)
-    c[-1] = 1.0  # Center at [0,...,0,1]
+    c = torch.zeros(n + 1, device=points.device) # center at origin
     
     # Project points to sphere
-    sphere_points = stereographic_projection_to_sphere(points, c, r)
+    sphere_points = stereographic_projection_to_sphere(points, c, 1)
     
     # Step 2: Apply rotation
     rotated_points = torch.matmul(sphere_points, rotation_matrix.transpose(0, 1))
+
+    # scale points by radius
+    ## TODO
     
     # Step 3: Stereographic projection back to flat space
     flat_points = stereographic_projection_to_flat(rotated_points, c, r)
     
     return flat_points
+
+def apply_warp_to_coords(coords, r, rotation_angles, eccentricity, c_factor):
+    """
+    Apply the warping sequence to input coordinates.
+    """
+    device = coords.device
+    
+    # Create rotation matrix on the same device as coords
+    rotation_matrix = create_nd_rotation_matrix(rotation_angles, 3).to(device)
+    
+    flat_points = ball_to_flat(coords, eccentricity, c_factor)
+    warped_points = warp_with_rotation(flat_points, r, rotation_matrix)
+    return warped_points
+
+def normalize_tensor(tensor):
+    """
+    Normalize a tensor to have values between 0 and 1.
+    
+    Parameters:
+    -----------
+    tensor : torch.Tensor
+        Tensor to normalize
+        
+    Returns:
+    --------
+    normalized_tensor : torch.Tensor
+        Normalized tensor with values between 0 and 1
+    """
+    with torch.no_grad():
+        min_val = tensor.min()
+        max_val = tensor.max()
+        
+        # Avoid division by zero
+        if max_val - min_val < 1e-8:
+            return torch.zeros_like(tensor)
+        
+        normalized = (tensor - min_val) / (max_val - min_val)
+        
+    return normalized
+
+
+class FunctionTensor:
+    """
+    A class to represent a function tensor defined on a grid with coordinate transformations
+    between ball space and flat space.
+    """
+    
+    def __init__(self, resolution=200, domain_size=1.0, eccentricity=3.0, c_factor=1.34, device='cpu'):
+        """
+        Initialize the function tensor with a grid of points.
+        
+        Parameters:
+        -----------
+        resolution : int
+            Grid resolution
+        domain_size : float
+            Size of the domain (half-width and half-height), defaults to 1.0 for unit ball
+        eccentricity : float
+            Eccentricity parameter for ball_to_flat transformation
+        c_factor : float
+            C-factor parameter for ball_to_flat transformation
+        device : torch.device or str
+            Device to put the tensor on
+        """
+        self.resolution = resolution
+        self.domain_size = domain_size
+        self.eccentricity = eccentricity
+        self.c_factor = c_factor
+        self.device = device if isinstance(device, torch.device) else torch.device(device)
+        
+        # Create grid and function values
+        self._create_grid()
+        self._compute_function_values()
+        
+        # Initialize interpolators
+        self.ball_interpolator = None
+        self.flat_interpolator = None
+        
+    def _create_grid(self):
+        """Create grid coordinates in ball space and flat space."""
+        with torch.no_grad():
+            # Create grid coordinates in ball space
+            x = torch.linspace(-self.domain_size, self.domain_size, self.resolution)
+            y = torch.linspace(-self.domain_size, self.domain_size, self.resolution)
+            X, Y = torch.meshgrid(x, y, indexing='ij')
+            
+            # Create coordinates tensor for ball space
+            self.ball_coords = torch.stack([X.flatten(), Y.flatten()], dim=-1).to(self.device)
+            
+            # Calculate the norm of each coordinate for masking
+            self.norms = torch.sqrt(self.ball_coords[:, 0]**2 + self.ball_coords[:, 1]**2)
+            
+            # Valid points are inside the circle
+            self.valid_mask = self.norms < self.domain_size
+            
+            # Convert ball space coordinates to flat space
+            self.flat_coords = ball_to_flat(self.ball_coords, self.eccentricity, self.c_factor)
+    
+    def _compute_function_values(self):
+        """Compute function values using the flat space coordinates."""
+        with torch.no_grad():
+            # Example function: sin(xy) + cos(2y) + sin(3x)
+            # This can be replaced with any other function
+            values = torch.sin(self.flat_coords[:, 0] * self.flat_coords[:, 1]) + \
+                    torch.cos(2 * self.flat_coords[:, 1]) + \
+                    torch.sin(3 * self.flat_coords[:, 0])
+            
+            # Zero out values outside the valid domain
+            self.values = values * self.valid_mask
+            
+            # Reshape to 2D tensor for grid representation
+            self.function_tensor = self.values.reshape(self.resolution, self.resolution)
+            
+            # Always normalize the tensor when creating it
+            self.function_tensor = normalize_tensor(self.function_tensor)
+            self.values = self.function_tensor.flatten()
+    
+    def set_function_values(self, func):
+        """
+        Set function values using a custom function that takes flat coordinates as input.
+        
+        Parameters:
+        -----------
+        func : callable
+            Function that takes flat coordinates tensor as input and returns function values
+        """
+        with torch.no_grad():
+            # Apply function to flat coordinates
+            values = func(self.flat_coords)
+            
+            # Zero out values outside the valid domain
+            self.values = values * self.valid_mask
+            
+            # Reshape to 2D tensor
+            self.function_tensor = self.values.reshape(self.resolution, self.resolution)
+            
+            # Always normalize
+            self.function_tensor = normalize_tensor(self.function_tensor)
+            self.values = self.function_tensor.flatten()
+        
+        # Reset interpolators
+        self.ball_interpolator = None
+        self.flat_interpolator = None
+    
+    def set_values_from_tensor(self, tensor):
+        """
+        Set function values directly from a tensor.
+        
+        Parameters:
+        -----------
+        tensor : torch.Tensor
+            2D tensor with shape (resolution, resolution) containing function values
+        """
+        if tensor.shape != (self.resolution, self.resolution):
+            raise ValueError(f"Expected tensor of shape ({self.resolution}, {self.resolution}), "
+                            f"got {tensor.shape}")
+        
+        with torch.no_grad():
+            self.function_tensor = tensor.to(self.device)
+            self.values = self.function_tensor.flatten()
+            
+            # Apply mask
+            self.values = self.values * self.valid_mask
+            
+            # Update function tensor with masked values
+            self.function_tensor = self.values.reshape(self.resolution, self.resolution)
+        
+        # Reset interpolators
+        self.ball_interpolator = None
+        self.flat_interpolator = None
+    
+    def _ensure_ball_interpolator(self):
+        """Create interpolator for ball space if it doesn't exist."""
+        if self.ball_interpolator is None:
+            # Convert tensors to numpy for interpolation
+            ball_coords_np = self.ball_coords.detach().cpu().numpy()
+            values_np = self.values.detach().cpu().numpy()
+            
+            # Create interpolator
+            self.ball_interpolator = LinearNDInterpolator(
+                ball_coords_np, 
+                values_np, 
+                fill_value=0
+            )
+    
+    def _ensure_flat_interpolator(self):
+        """Create interpolator for flat space if it doesn't exist."""
+        if self.flat_interpolator is None:
+            # Convert tensors to numpy for interpolation
+            flat_coords_np = self.flat_coords.detach().cpu().numpy()
+            values_np = self.values.detach().cpu().numpy()
+            
+            # Create interpolator
+            self.flat_interpolator = LinearNDInterpolator(
+                flat_coords_np, 
+                values_np, 
+                fill_value=0
+            )
+    
+    def sample_at_ball_coords(self, coords):
+        """
+        Sample the function at given ball space coordinates using interpolation.
+        
+        Parameters:
+        -----------
+        coords : torch.Tensor
+            Coordinates in ball space to sample at, shape (N, 2)
+            
+        Returns:
+        --------
+        sampled_values : torch.Tensor
+            Function values at the given coordinates
+        """
+        self._ensure_ball_interpolator()
+        
+        # Convert coords to numpy
+        coords_np = coords.detach().cpu().numpy()
+        
+        # Sample function
+        sampled_values = self.ball_interpolator(coords_np)
+        
+        # Convert back to tensor
+        return torch.tensor(sampled_values, dtype=torch.float32, device=self.device)
+    
+    def sample_at_flat_coords(self, coords):
+        """
+        Sample the function at given flat space coordinates using interpolation.
+        
+        Parameters:
+        -----------
+        coords : torch.Tensor
+            Coordinates in flat space to sample at, shape (N, 2)
+            
+        Returns:
+        --------
+        sampled_values : torch.Tensor
+            Function values at the given coordinates
+        """
+        self._ensure_flat_interpolator()
+        
+        # Convert coords to numpy
+        coords_np = coords.detach().cpu().numpy()
+        
+        # Sample function
+        sampled_values = self.flat_interpolator(coords_np)
+        
+        # Convert back to tensor
+        return torch.tensor(sampled_values, dtype=torch.float32, device=self.device)
+    
+    def get_normalized_tensor(self):
+        """
+        Get a normalized version of the function tensor with values between 0 and 1.
+        
+        Returns:
+        --------
+        normalized_tensor : torch.Tensor
+            Normalized function tensor
+        """
+        return normalize_tensor(self.function_tensor)
+    
+    def warp_coordinates(self, coords, r=1.0, rotation_angles=None):
+        """
+        Apply warping to the coordinates.
+        
+        Parameters:
+        -----------
+        coords : torch.Tensor
+            Coordinates to warp, shape (N, 2)
+        r : float
+            Radius parameter for the stereographic projection
+        rotation_angles : list or torch.Tensor
+            Rotation angles for 3D rotation matrix
+            
+        Returns:
+        --------
+        warped_coords : torch.Tensor
+            Warped coordinates
+        """
+        if rotation_angles is None:
+            rotation_angles = [0.0, 0.0, 0.0]  # Default: no rotation
+            
+        return apply_warp_to_coords(
+            coords, 
+            r, 
+            rotation_angles, 
+            self.eccentricity, 
+            self.c_factor
+        )
+    
+    def warp_and_sample(self, coords, r=1.0, rotation_angles=None, use_flat_space=False):
+        """
+        Warp coordinates and sample function values.
+        
+        Parameters:
+        -----------
+        coords : torch.Tensor
+            Coordinates to warp and sample at, shape (N, 2)
+        r : float
+            Radius parameter for the stereographic projection
+        rotation_angles : list or torch.Tensor
+            Rotation angles for 3D rotation matrix
+        use_flat_space : bool
+            If True, treats input coordinates as flat space coords,
+            otherwise treats them as ball space coords
+            
+        Returns:
+        --------
+        sampled_values : torch.Tensor
+            Function values at the warped coordinates
+        """
+        warped_coords = self.warp_coordinates(coords, r, rotation_angles)
+        
+        if use_flat_space:
+            return self.sample_at_flat_coords(warped_coords)
+        else:
+            # Convert warped flat coords to ball coords
+            ball_coords = flat_to_ball(
+                warped_coords, 
+                self.eccentricity, 
+                self.c_factor
+            )
+            return self.sample_at_ball_coords(ball_coords)
+    
+    def visualize(self, ax=None, cmap='viridis', normalize=True):
+        """
+        Visualize the function tensor.
+        
+        Parameters:
+        -----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on
+        cmap : str, optional
+            Colormap name
+        normalize : bool, optional
+            Whether to normalize the tensor values
+            
+        Returns:
+        --------
+        ax : matplotlib.axes.Axes
+            Axes with the plot
+        """
+        import matplotlib.pyplot as plt
+        
+        if ax is None:
+            _, ax = plt.subplots(figsize=(8, 8))
+        
+        # Get tensor for visualization
+        tensor = self.get_normalized_tensor() if normalize else self.function_tensor
+        
+        # Plot
+        im = ax.imshow(
+            tensor.detach().cpu().numpy(),
+            extent=[-self.domain_size, self.domain_size, -self.domain_size, self.domain_size],
+            origin='lower',
+            cmap=cmap
+        )
+        
+        # Add colorbar
+        plt.colorbar(im, ax=ax)
+        
+        # Set labels
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_title('Function Tensor')
+        
+        return ax
