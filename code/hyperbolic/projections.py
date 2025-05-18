@@ -420,7 +420,7 @@ class FunctionTensor:
         """Create grid coordinates in ball space and flat space."""
         with torch.no_grad():
             # Create grid coordinates in ball space
-            X, Y = create_grid(domain_size, resolution)
+            X, Y = create_grid(self.domain_size, self.resolution)
             
             # Create coordinates tensor for ball space
             self.ball_coords = torch.stack([X.flatten(), Y.flatten()], dim=-1).to(self.device)
