@@ -63,9 +63,6 @@ def create_simplified_visualization(function_dict, resolution=100, scale=1.0, x_
     # Original function plot
     ax1 = fig.add_subplot(131)
     
-    # 3D plot for bounded visualization
-    ax2 = fig.add_subplot(132, projection='3d')
-    
     # Transformed function plot
     ax3 = fig.add_subplot(133)
     
@@ -114,22 +111,7 @@ def create_simplified_visualization(function_dict, resolution=100, scale=1.0, x_
     # Plot the bounded points in 3D
     Z_values = current_function(X_bounded, Y_bounded)
     
-    # Plot the bounded space in 3D
-    surf = ax2.plot_surface(X_bounded, Y_bounded, Z_bounded, facecolors=plt.cm.viridis(
-        (Z_values - Z_values.min()) / (Z_values.max() - Z_values.min() + 1e-8)
-    ), alpha=0.8)
     
-    # Add the center point
-    ax2.scatter([0], [0], [0], color='red', s=100, label='Origin')
-    
-    ax2.set_title('Bounded Space (Using tanh)')
-    ax2.set_xlabel('x')
-    ax2.set_ylabel('y')
-    ax2.set_zlabel('z')
-    ax2.legend()
-    
-    # Set equal aspect ratio for 3D plot
-    ax2.set_box_aspect([1, 1, 1])
     
     # Plot transformed function
     im3 = ax3.imshow(Z_transformed, 
@@ -173,22 +155,6 @@ def create_simplified_visualization(function_dict, resolution=100, scale=1.0, x_
         
         # Sample function at bounded points
         Z_values = current_func(X_bounded, Y_bounded)
-        
-        # Clear the 3D plot and redraw
-        ax2.clear()
-        surf = ax2.plot_surface(X_bounded, Y_bounded, Z_bounded, facecolors=plt.cm.viridis(
-            (Z_values - Z_values.min()) / (Z_values.max() - Z_values.min() + 1e-8)
-        ), alpha=0.8)
-        
-        # Add the center point
-        ax2.scatter([0], [0], [0], color='red', s=100, label='Origin')
-        
-        ax2.set_title('Bounded Space (Using tanh)')
-        ax2.set_xlabel('x')
-        ax2.set_ylabel('y')
-        ax2.set_zlabel('z')
-        ax2.legend()
-        ax2.set_box_aspect([1, 1, 1])
         
         # Update transformed function
         Z_transformed = current_func(X_bounded, Y_bounded)
