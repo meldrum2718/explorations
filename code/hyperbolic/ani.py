@@ -136,8 +136,8 @@ def main():
     
     slider_domain = Slider(ax_domain, 'Domain Size', 0.1, 10.0, valinit=domain_size_init)
     slider_radius = Slider(ax_radius, 'Radius', 0.1, 10.0, valinit=r_init)
-    slider_eccentricity = Slider(ax_eccentricity, 'Eccentricity', 0.1, 10.0, valinit=eccentricity_init)
-    slider_c_factor = Slider(ax_c_factor, 'C-Factor', 0.1, 5.0, valinit=c_factor_init)
+    slider_eccentricity = Slider(ax_eccentricity, 'Eccentricity', -10.0, 10.0, valinit=eccentricity_init)
+    slider_c_factor = Slider(ax_c_factor, 'C-Factor', -5.0, 5.0, valinit=c_factor_init)
     slider_theta_x = Slider(ax_theta_x, 'X Rotation', -np.pi, np.pi, valinit=theta_x_init)
     slider_theta_y = Slider(ax_theta_y, 'Y Rotation', -np.pi, np.pi, valinit=theta_y_init)
     slider_theta_z = Slider(ax_theta_z, 'Z Rotation', -np.pi, np.pi, valinit=theta_z_init)
