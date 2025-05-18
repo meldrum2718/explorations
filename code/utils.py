@@ -45,6 +45,11 @@ def get_appropriate_dims_for_ax_grid(n) -> tuple:
     return best_dims
 
 
+def ctime_as_fname():
+    """ Return time.ctime() formatted well for a file name."""
+    return  time.ctime().replace(' ', '_').replace(':', '.')
+
+
 def normalize(im):
     """ scale im pixels to [0, 1] """
     try:
@@ -79,7 +84,6 @@ def inspect(label, im):
     print()
 
 
-
 def set_pos_data(graph: nx.Graph, pos: dict = None):
     """ Set pos data for graph using the pos dict provided, or according to the
         kamada kawai layout.
@@ -92,8 +96,6 @@ def set_pos_data(graph: nx.Graph, pos: dict = None):
             return pos
     nx.set_node_attributes(graph, pos, 'pos')
     return pos
-
-
 
 
 def plot(

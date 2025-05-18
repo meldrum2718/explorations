@@ -1,0 +1,19 @@
+TODO:
+    network topology. specifically, how to parameterize 'edges'. do we want a
+    concrete graph? i feel like i want to sample a graphon from one of the
+    nodes in the network.. sampling this graphon could give a weighted adjacency structure
+    then also how to get the kernels. again, sampling from a 'control' matrix
+
+    think:
+        have n nodes. then adjacency structure is an nxn matrix.
+        then need to assign kernels to edges.
+
+------------
+12/3/24
+    x-implement slider based interaction for the ga component
+    -implement decoder
+        -going to write a sort of deconv stem that happens at the end of can.step
+
+    -rename noise_fbk -> diffusion_noise_scale, and implement this appropriately
+
+

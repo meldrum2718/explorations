@@ -19,7 +19,6 @@ def main(args):
 
     with torch.no_grad():
 
-        use_color = (args.C >= 3)
         cap = None
         try:
 
@@ -34,7 +33,8 @@ def main(args):
 
             alpha = 0.1
             noise_scale = 0
-            L_step_max = 0
+            L_step = 0
+            L_input = 1
             input_alpha = 1
 
             H = W = args.N ** args.K
@@ -42,7 +42,8 @@ def main(args):
 
             def step():
                 nonlocal alpha
-                nonlocal L_step_max
+                nonlocal L_step
+                nonlocal L_input
                 nonlocal noise_scale
                 nonlocal input_alpha
 
@@ -50,57 +51,62 @@ def main(args):
 
                 while True:
                     t += 1
-                    inp = torch.zeros(H, W, 3 if use_color else 1)
+                    inp = torch.zeros(H, W, 1)
                     if args.video_input:
                         _, inp = cap.read()
                         # convert inp to rgb with shape (h, w) and pixel values in [0, 1]
                         inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB)
                         inp = cv2.resize(inp, (W, H), interpolation = cv2.INTER_AREA) / 255.0
                         inp = torch.Tensor(inp) # (H, W, C)
-                        if not use_color:
-                            inp = inp.mean(dim=-1).unsqueeze(-1)
+                        inp = inp.mean(dim=-1).unsqueeze(-1) # make black and white
+
+
+                        L_inp = L_input
+                        if args.use_random_L_input:
+                            L_inp = torch.randint(0, L_input+1, size=(1,)).item()
 
                         input_idx = args.stdin_idx
                         if args.use_random_input_idx:
-                            input_idx = torch.randint(0, args.N**2, size=(1,)).item()
+                            idx_max = args.N**(2*L_inp) if L_inp > 0 else 1
+                            input_idx = torch.randint(0, idx_max, size=(1,)).item()
 
-                        L_input = 1
-                        if args.use_random_input_L:
-                            L_input = torch.randint(0, L+1, size=(1,)).item()
-                        
                         hcan.input(
                             inp,
                             node_idx=input_idx,
-                            L=L_input,
+                            L=L_inp,
                             alpha=input_alpha,
                         )
 
                     if args.use_noise_fbk:
                         hcan.add_noise(alpha * noise_scale) # * pred_error
 
-                    L_step_sampler = torch.distributions.categorical.Categorical(logits=torch.arange(L_step_max + 1) + 1)
-                    L_step = L_step_sampler.sample()
-                    print('L_step:', L_step)
-                    hcan.step(alpha=alpha, L=L_step)
+                    L_st = L_step
+                    if args.use_random_L_step and L_step > 0:
+                        L_step_sampler = torch.distributions.categorical.Categorical(logits=L_step - torch.arange(L_step) + 1)
+                        L_st = L_step_sampler.sample()
+                    print('L_st:', L_st)
+                    hcan.step(alpha=alpha, L=t % (L_step+1), C_min=0, C_max=None) ## TODO guesswork hacky L_step schedule
                     
                     yield t, hcan
 
 
             ## set up figure for displaying the dyn.sys and some sliders
-            fig, ax = plt.subplots()
-            ax.axis('off')
+            fig, axs = plt.subplots(1, hcan.C)
+            if not hasattr(axs, '__iter__'):
+                axs = [axs]
+            for ax in axs: ax.axis('off')
             fig.subplots_adjust(bottom=0.25)
-
-            cmap = None if use_color else 'grey'
-            im = ax.imshow(hcan.output(), cmap=cmap)
-
+            cmap = 'grey'
+            ims = [axs[ci].imshow(hcan.state[..., ci], cmap=cmap) for ci in range(hcan.C)]
 
             ## set up animation
             def draw_func(frame):
                 t, can = frame
-                im.set_data(hcan.output())
+                for ci, im in enumerate(ims):
+                    im.set_data(hcan.state[..., ci])
+
                 fig.suptitle(str(t))
-                return [im]
+                return ims
 
             ani = FuncAnimation(
                 fig,
@@ -118,20 +124,25 @@ def main(args):
             alpha_slider.on_changed(update_alpha)
 
 
-            def update_L_step_max(x):
-                nonlocal L_step_max
-                L_step_max = x
-            L_step_max_slider = Slider(fig.add_axes((0.2, 0.06, 0.65, 0.03)), label='L_step_max', valmin=0, valmax=args.K-1, valinit=0, valstep=1)
-            L_step_max_slider.on_changed(update_L_step_max)
+            def update_L_input(x):
+                nonlocal L_input
+                L_input = x
+            L_input_slider = Slider(fig.add_axes((0.2, 0.06, 0.65, 0.03)), label='L_input', valmin=0, valmax=args.K-1, valinit=0, valstep=1)
+            L_input_slider.on_changed(update_L_input)
+
+
+            def update_L_step(x):
+                nonlocal L_step
+                L_step = x
+            L_step_slider = Slider(fig.add_axes((0.2, 0.09, 0.65, 0.03)), label='L_step', valmin=0, valmax=args.K-1, valinit=0, valstep=1)
+            L_step_slider.on_changed(update_L_step)
 
 
             def update_input_alpha(x):
                 nonlocal input_alpha
                 input_alpha = x
-            input_alpha_slider = Slider(fig.add_axes((0.2, 0.09, 0.65, 0.03)), label=r'input $\alpha$', valmin=0, valmax=1, valinit=input_alpha)
+            input_alpha_slider = Slider(fig.add_axes((0.2, 0.12, 0.65, 0.03)), label=r'input $\alpha$', valmin=0, valmax=1, valinit=input_alpha)
             input_alpha_slider.on_changed(update_input_alpha)
-
-
 
 
             if args.use_noise_fbk:
@@ -139,7 +150,7 @@ def main(args):
                 def update_noise_scale(x):
                     nonlocal noise_scale
                     noise_scale = x
-                noise_fbk_slider = Slider(fig.add_axes((0.2, 0.12, 0.65, 0.03)), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
+                noise_fbk_slider = Slider(fig.add_axes((0.2, 0.15, 0.65, 0.03)), label='Noise scale', valmin=args.noise_fbk_min, valmax=args.noise_fbk_max, valinit=noise_scale)
                 noise_fbk_slider.on_changed(update_noise_scale)
 
             plt.show()
@@ -165,7 +176,8 @@ if __name__ == '__main__':
     ## parser.add_argument('--stdout_idx', required=False, default=None, type=int)
 
     parser.add_argument('--use_random_input_idx', action='store_true')
-    parser.add_argument('--use_random_input_L', action='store_true')
+    parser.add_argument('--use_random_L_input', action='store_true')
+    parser.add_argument('--use_random_L_step', action='store_true')
 
     parser.add_argument('--video_input', action='store_true')
 
@@ -176,7 +188,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--noise_fbk_min', required=False, default=None, type=float)
     parser.add_argument('--noise_fbk_max', required=False, default=None, type=float)
-
 
     ## TODO
     ## parser.add_argument('--activation')
