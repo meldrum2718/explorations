@@ -20,7 +20,7 @@ from projections import (
 )
 
 # Import neural field
-from neural_field import create_random_fields, NeuralField
+from neural_field import NeuralField
 
 def apply_warp_to_coords(coords, r, rotation_angles, eccentricity, c_factor):
     """
@@ -60,24 +60,24 @@ def main():
                           'cpu')
     print(f"Using device: {device}")
     
-    # Create random neural fields (scalar only)
-    num_fields = 3
-    scalar_fields = create_random_fields(
-        num_fields=num_fields, 
-        seed=42, 
-        output_dim=1,
-        device=device
-    )
+    ### TODO update the code to just use a single field, dont have multiple fields
+    field = NeuralField(seed=42, d_h=64, n_layers=3, L=6, output_dim=1, device=device)
+
+
+    # field = create_random_fields(
+    #     num_fields=num_fields, 
+    #     seed=42, 
+    #     output_dim=1,
+    #     device=device
+    # )
     
     # Create optimizers for each field
-    optimizers = []
-    for field in scalar_fields:
-        optimizers.append(torch.optim.Adam(field.model.parameters(), lr=0.001))
+    optimizer = torch.optim.Adam(field.model.parameters(), lr=0.001)
     
-    # Define function dictionary with the neural fields
-    function_dict = {}
-    for i, field in enumerate(scalar_fields):
-        function_dict[f'neural_field_{i+1}'] = field
+    # # Define function dictionary with the neural fields
+    # function_dict = {}
+    # for i, field in enumerate(scalar_fields):
+    #     function_dict[f'neural_field_{i+1}'] = field
     
     # Set up grid parameters
     resolution = 200  # Reduced for faster rendering
@@ -108,10 +108,6 @@ def main():
     learning_rate_init = 0.001  # Initial learning rate
     steps_per_frame_init = 1  # Initial steps per frame
     
-    # Initial function choice
-    current_function_name = list(function_dict.keys())[0]
-    current_function = function_dict[current_function_name]
-    current_optimizer = optimizers[list(function_dict.keys()).index(current_function_name)]
     
     # Create a simple figure with two subplots (original and warped)
     fig, axs = plt.subplots(1, 2, figsize=(12, 6))
@@ -121,7 +117,7 @@ def main():
     Y = normalized_Y * domain_size_init
     
     # Original function display
-    original_data = current_function(X, Y)
+    original_data = field(X, Y)
     original_im = axs[0].imshow(original_data, origin='lower', 
                               extent=[-domain_size_init, domain_size_init, -domain_size_init, domain_size_init],
                               cmap='viridis')
@@ -161,7 +157,7 @@ def main():
     ax_anim_speed = plt.axes([0.25, 0.10, 0.65, 0.03])  # Animation Speed
     ax_learning_rate = plt.axes([0.25, 0.05, 0.65, 0.03])  # Learning Rate
     
-    slider_domain = Slider(ax_domain, 'Domain Size', 0.1, 10.0, valinit=domain_size_init)
+    slider_domain = Slider(ax_domain, 'Domain Size', 0.1, 100.0, valinit=domain_size_init)
     slider_radius = Slider(ax_radius, 'Radius', 0.1, 10.0, valinit=r_init)
     slider_theta_x = Slider(ax_theta_x, 'X Rotation', -np.pi, np.pi, valinit=theta_x_init)
     slider_theta_y = Slider(ax_theta_y, 'Y Rotation', -np.pi, np.pi, valinit=theta_y_init)
@@ -178,10 +174,6 @@ def main():
     
     ax_reset = plt.axes([0.05, 0.10, 0.15, 0.05])
     button_reset = Button(ax_reset, 'Reset Field')
-    
-    # Create radio buttons for function selection
-    ax_func = plt.axes([0.05, 0.05, 0.15, 0.10])
-    radio = RadioButtons(ax_func, list(function_dict.keys()), active=list(function_dict.keys()).index(current_function_name))
     
     # Function to perform gradient updates on the neural field
     def perform_gradient_update(field, optimizer, original_coords, warped_coords, learning_rate):
@@ -231,8 +223,8 @@ def main():
         Y = normalized_Y * domain_size
         
         # Update the original image
-        current_function.model.eval()  # Set to eval mode for visualization
-        original_data = current_function(X, Y)
+        field.model.eval()  # Set to eval mode for visualization
+        original_data = field(X, Y)
         original_im.set_array(original_data)
         original_im.set_extent([-domain_size, domain_size, -domain_size, domain_size])
         original_im.set_clim(original_data.min(), original_data.max())
@@ -250,7 +242,7 @@ def main():
         warped_y = warped_coords[:, 1].reshape(resolution, resolution).cpu().numpy()
         
         # Evaluate the neural field on the warped coordinates
-        warped_data = current_function(warped_x, warped_y)
+        warped_data = field(warped_x, warped_y)
         
         # Update the warped image
         warped_im.set_array(warped_data)
@@ -301,8 +293,8 @@ def main():
         if gradient_updates_enabled:
             # Perform a single step of gradient update
             loss_val = perform_gradient_update(
-                current_function, 
-                current_optimizer, 
+                field, 
+                optimizer, 
                 original_coords, 
                 warped_coords, 
                 learning_rate
@@ -337,12 +329,6 @@ def main():
     
     # Function to update the neural field selection
     def update_function(function_name):
-        nonlocal current_function, current_function_name, current_optimizer
-        current_function_name = function_name
-        current_function = function_dict[function_name]
-        current_optimizer = optimizers[list(function_dict.keys()).index(function_name)]
-        
-        # Force a full update to refresh everything
         update()
     
     # Function to toggle animation
@@ -377,21 +363,14 @@ def main():
     
     # Function to reset the neural field
     def reset_field(event):
+
         # Recreate the current field with the same parameters
-        idx = list(function_dict.keys()).index(current_function_name)
-        new_field = create_random_fields(num_fields=1, seed=42+idx, output_dim=1, device=device)[0]
-        
-        # Replace in the dictionary
-        function_dict[current_function_name] = new_field
-        
-        # Update current function reference
-        nonlocal current_function
-        current_function = new_field
+        nonlocal field
+        field = NeuralField(seed=42, d_h=64, n_layers=3, L=6, output_dim=1, device=device)
         
         # Create a new optimizer
-        nonlocal current_optimizer
-        current_optimizer = torch.optim.Adam(new_field.model.parameters(), lr=slider_learning_rate.val)
-        optimizers[idx] = current_optimizer
+        nonlocal optimizer
+        optimizer = torch.optim.Adam(new_field.model.parameters(), lr=slider_learning_rate.val)
         
         # Force a full update
         update()
@@ -408,7 +387,7 @@ def main():
     slider_theta_y.on_changed(update)
     slider_theta_z.on_changed(update)
     slider_learning_rate.on_changed(lambda val: None)  # No immediate update needed
-    radio.on_clicked(update_function)
+    # radio.on_clicked(update_function)
     button_anim_toggle.on_clicked(toggle_animation)
     button_grad_toggle.on_clicked(toggle_gradients)
     button_reset.on_clicked(reset_field)

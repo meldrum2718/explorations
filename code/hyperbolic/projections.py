@@ -370,6 +370,14 @@ def normalize_tensor(tensor):
         
     return normalized
 
+def create_grid(domain_size, resolution):
+    """Create grid coordinates in ball space and flat space."""
+    with torch.no_grad():
+        # Create grid coordinates in ball space
+        x = torch.linspace(-domain_size, domain_size, resolution)
+        y = torch.linspace(-domain_size, domain_size, resolution)
+        X, Y = torch.meshgrid(x, y, indexing='ij')
+        return X, Y
 
 class FunctionTensor:
     """
@@ -412,9 +420,7 @@ class FunctionTensor:
         """Create grid coordinates in ball space and flat space."""
         with torch.no_grad():
             # Create grid coordinates in ball space
-            x = torch.linspace(-self.domain_size, self.domain_size, self.resolution)
-            y = torch.linspace(-self.domain_size, self.domain_size, self.resolution)
-            X, Y = torch.meshgrid(x, y, indexing='ij')
+            X, Y = create_grid(domain_size, resolution)
             
             # Create coordinates tensor for ball space
             self.ball_coords = torch.stack([X.flatten(), Y.flatten()], dim=-1).to(self.device)

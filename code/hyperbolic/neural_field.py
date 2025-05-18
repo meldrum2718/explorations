@@ -3,6 +3,8 @@ Neural field implementation using MLP with positional encoding.
 This provides a randomly initialized neural field to visualize with stereographic projections.
 """
 
+## TODO refactor this code ..
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -66,6 +68,7 @@ class NeuralField:
         # Convert to torch tensor
         coords_torch = torch.tensor(coords, dtype=torch.float32, device=self.device)
         
+        ## TODO what ?? this seems wack .. dont normalize the coords ..
         # Normalize coordinates to [0, 1] range
         # (assuming x and y are already in a sensible range like [-1, 1] or [-10, 10])
         x_min, x_max = coords_torch[:, 0].min(), coords_torch[:, 0].max()
@@ -127,6 +130,7 @@ def pos_enc(coords: torch.Tensor, L: int = 10):
     return pe
 
 
+## TODO what is this code organization?? why pos enc in mlp not in the nf directly ..
 class MLP(nn.Module):
     def __init__(self, d_in, d_h, n_layers, output_dim=1, L=10):
         """
@@ -190,7 +194,7 @@ class MLP(nn.Module):
         return x
 
 
-def create_random_fields(num_fields=5, seed=None, output_dim=1, device='cpu'):
+def create_random_field(seed=42, output_dim=1, device=torch.device('cpu')):
     """
     Create multiple random neural fields with different seeds.
     
@@ -212,13 +216,7 @@ def create_random_fields(num_fields=5, seed=None, output_dim=1, device='cpu'):
     """
     fields = []
     
-    if seed is not None:
-        base_seed = seed
-    else:
-        base_seed = np.random.randint(0, 10000)
-    
     for i in range(num_fields):
-        field_seed = base_seed + i
         
         # Vary hyperparameters slightly for diversity
         d_h = np.random.randint(32, 128)
@@ -226,7 +224,7 @@ def create_random_fields(num_fields=5, seed=None, output_dim=1, device='cpu'):
         L = np.random.randint(4, 10)
         
         field = NeuralField(
-            seed=field_seed,
+            seed=seed,
             d_h=d_h,
             n_layers=n_layers,
             L=L,
