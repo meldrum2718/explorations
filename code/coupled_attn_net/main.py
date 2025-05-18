@@ -108,7 +108,7 @@ def main(args):
                         noise = torch.randn_like(inp) * inp_noise_scale
                         noisy_inp = inp + noise
 
-                        can.input(noisy_inp, node_idx=None, ga_eval=args.use_ga)
+                        can.input(noisy_inp, node_idx=None, ga_eval=args.use_ga, use_noise_fbk=args.use_noise_fbk, noise_scale=ns)
 
                     if args.use_ga and (t % ga_sel_period) == 0:
                         ga_scores = can.ga_step(k=ga_topk, max_noise_scale=ga_noise_scale)

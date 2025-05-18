@@ -155,7 +155,7 @@ class CAN:
         return out
 
 
-    def input(self, inp, node_idx=None, alpha=1, ga_eval=False):
+    def input(self, inp, node_idx=None, alpha=1, ga_eval=False, use_noise_fbk=False, noise_scale=0):
         """ update state[idx] as a convex combination with inp."""
         if node_idx is None:
             node_idx = self.stdin_idx
@@ -164,13 +164,15 @@ class CAN:
 
         inp = inp.unsqueeze(0) # (H, W, C) -> (1, H, W, C)
 
-        if ga_eval:
+        if ga_eval or use_noise_fbk:
             # evaluate each batch (in ga language: compute the fitness of the various candidate solutions)
             with torch.no_grad():
                 preds = self.output(self.stdout_idx)
                 loss = F.mse_loss(preds, inp.expand(*preds.shape), reduction='none') # elementwise mse loss
                 loss = loss.mean(dim=list(range(1, len(loss.shape)))) # average all but batch dim
                 self.losses += loss
+
+
 
         inp = inp.permute(0, 3, 1, 2) # (1, H, W, C) -> (1, C, H, W)
 
@@ -262,9 +264,6 @@ class CAN:
         else:
             # some kinda hacky coersion of a real tensor to [0, 1]^self.state.numel -- hacky since multiplication really doesnt play nice with this projection (observe $(1+a)*b = ab + b \neq ab$ (mod 1)) (i.e. this map onto the torus is not a homomorphism for real multiplication .. or something like that!)
             self.state = torch.frac(1 + torch.frac(self.state))
-
-
-
 
         # Note: in the following implementations, the convolutions are brittle in
         # the sense that stride and kernel size are assumed to be the right
