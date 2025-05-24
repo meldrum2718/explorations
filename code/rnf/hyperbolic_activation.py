@@ -1,14 +1,24 @@
+
+""" TODO maek b be vector values
+"""
+
+
 import torch
 import torch.nn.functional as F
 
 def flat_to_ball(x, a=1.0, b=0.0):
-    """Maps x to tanh(||ax+b||)(ax+b)/||ax+b||"""
+    """Maps x to tanh(||ax+b||)(ax+b)/||ax+b|| with inversion for ||ax+b||>1"""
     ax_b = a * x + b
     norm = torch.norm(ax_b, dim=-1, keepdim=True)
     # Handle zero norm case
     norm = torch.clamp(norm, min=1e-8)
     unit_vec = ax_b / norm
-    return torch.tanh(norm) * unit_vec
+    
+    # Apply inversion if norm > 1: r -> 1/r
+    mapped_norm = torch.where(norm > 1.0, 1.0 / norm, norm)
+    
+    # Apply tanh to the mapped norm
+    return torch.tanh(mapped_norm) * unit_vec
 
 def ball_to_flat(y, a=1.0, b=0.0):
     """Inverse of flat_to_ball"""
@@ -45,7 +55,7 @@ def test_mappings():
     from matplotlib.widgets import Slider
     
     # Create meshgrid
-    res = 128
+    res = 256
     x = torch.linspace(-3, 3, res)
     y = torch.linspace(-3, 3, res)
     xx, yy = torch.meshgrid(x, y, indexing='ij')
@@ -59,7 +69,7 @@ def test_mappings():
     def periodic_func(coords, freq1, freq2, phase1, phase2):
         """sin(freq1*x+phase1) + sin(freq2*y+phase2)"""
         x, y = coords[..., 0], coords[..., 1]
-        return torch.sin(freq1 * x + phase1) + torch.sin(freq2 * y + phase2)
+        return torch.sin(freq1 * x*y + phase1) + torch.sin(freq2 * y*y + phase2)
     
     def update_plots(a, b, freq1, freq2, phase1, phase2):
         # 1. Original periodic function on regular meshgrid
@@ -94,7 +104,7 @@ def test_mappings():
     ims = []
     
     for i, (ax, title, func) in enumerate(zip(axes, titles, functions)):
-        im = ax.imshow(func.numpy(), extent=[-3, 3, -3, 3], origin='lower', cmap='viridis', vmin=-2, vmax=2)
+        im = ax.imshow(func.numpy(), extent=[-1, 1, -1, 1], origin='lower', cmap='viridis', vmin=-2, vmax=2)
         ax.set_title(title)
         ax.set_aspect('equal')
         ims.append(im)
@@ -110,12 +120,12 @@ def test_mappings():
     ax_phase1 = plt.axes([0.1, 0.15, slider_width, slider_height])
     ax_phase2 = plt.axes([0.3, 0.15, slider_width, slider_height])
     
-    slider_a = Slider(ax_a, 'a', 0.1, 5.0, valinit=init_a)
+    slider_a = Slider(ax_a, 'a', -10.001, 11.0, valinit=init_a)
     slider_b = Slider(ax_b, 'b', -2.0, 2.0, valinit=init_b)
-    slider_freq1 = Slider(ax_freq1, 'freq1', 0.1, 100.0, valinit=init_freq1)
-    slider_freq2 = Slider(ax_freq2, 'freq2', 0.1, 100.0, valinit=init_freq2)
-    slider_phase1 = Slider(ax_phase1, 'phase1', 0.0, 6.28, valinit=init_phase1)
-    slider_phase2 = Slider(ax_phase2, 'phase2', 0.0, 6.28, valinit=init_phase2)
+    slider_freq1 = Slider(ax_freq1, 'freq1', 0.1, 500.0, valinit=init_freq1)
+    slider_freq2 = Slider(ax_freq2, 'freq2', 0.1, 500.0, valinit=init_freq2)
+    slider_phase1 = Slider(ax_phase1, 'phase1', -10.0, 16.28, valinit=init_phase1)
+    slider_phase2 = Slider(ax_phase2, 'phase2', -10.0, 16.28, valinit=init_phase2)
     
     def update(val):
         a = slider_a.val
