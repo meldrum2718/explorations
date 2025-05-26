@@ -2,7 +2,6 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
-from scipy.interpolate import griddata
 from typing import Optional
 import math
 
@@ -84,26 +83,80 @@ class HyperbolicFunctionTensor:
     
     def sample_at(self, points: torch.Tensor) -> torch.Tensor:
         """Sample function at global coordinates by transforming to local frame."""
-        ## TODO prefer nd interp done directly in torch. fast vectorized code
         local_ball_coords = self.f2b(points)
+        return self._interpolate_nd(local_ball_coords)
+    
+    def _interpolate_nd(self, query_points: torch.Tensor) -> torch.Tensor:
+        """N-dimensional linear interpolation on regular grid."""
+        batch_size = query_points.shape[0]
         
-        # Convert mesh and values to flat arrays for interpolation
-        mesh_flat = self.mesh_ball.reshape(-1, self.n_dims)
+        # Transform query points from [-1, 1] to [0, resolution-1] grid coordinates
+        grid_coords = (query_points + 1) * (self.resolution - 1) / 2
+        
+        # Clamp to valid range
+        grid_coords = torch.clamp(grid_coords, 0, self.resolution - 1)
+        
+        # Get integer and fractional parts
+        grid_coords_floor = torch.floor(grid_coords).long()
+        grid_coords_frac = grid_coords - grid_coords_floor.float()
+        
+        # Clamp floor coordinates to valid indices
+        grid_coords_floor = torch.clamp(grid_coords_floor, 0, self.resolution - 2)
+        
+        # Generate all 2^n_dims corner points for each query point
+        n_corners = 2 ** self.n_dims
+        corner_offsets = torch.zeros(n_corners, self.n_dims, dtype=torch.long, device=self.device)
+        
+        # Generate binary combinations for corner offsets
+        for i in range(n_corners):
+            for d in range(self.n_dims):
+                corner_offsets[i, d] = (i >> d) & 1
+        
+        # Compute interpolation weights and sample values
+        result = torch.zeros(batch_size, self.n_channels, device=self.device)
+        
+        for corner_idx in range(n_corners):
+            # Get corner coordinates
+            corner_coords = grid_coords_floor + corner_offsets[corner_idx]
+            
+            # Compute interpolation weight for this corner
+            weight = torch.ones(batch_size, device=self.device)
+            for d in range(self.n_dims):
+                if corner_offsets[corner_idx, d] == 0:
+                    weight *= (1 - grid_coords_frac[:, d])
+                else:
+                    weight *= grid_coords_frac[:, d]
+            
+            # Sample values at corner coordinates
+            corner_values = self._sample_at_grid_indices(corner_coords)
+            
+            # Accumulate weighted contribution
+            result += weight.unsqueeze(1) * corner_values
+        
+        return result
+    
+    def _sample_at_grid_indices(self, indices: torch.Tensor) -> torch.Tensor:
+        """Sample values at integer grid indices."""
+        batch_size = indices.shape[0]
+        
+        # Convert n-dimensional indices to flat indices
+        if self.n_dims == 1:
+            flat_indices = indices[:, 0]
+        elif self.n_dims == 2:
+            flat_indices = indices[:, 0] * self.resolution + indices[:, 1]
+        elif self.n_dims == 3:
+            flat_indices = (indices[:, 0] * self.resolution + indices[:, 1]) * self.resolution + indices[:, 2]
+        else:
+            # General case for higher dimensions
+            flat_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+            multiplier = 1
+            for d in range(self.n_dims - 1, -1, -1):
+                flat_indices += indices[:, d] * multiplier
+                multiplier *= self.resolution
+        
+        # Reshape values to flat array and index
         values_flat = self.values.reshape(-1, self.n_channels)
-        
-        # Interpolate using scipy
-        mesh_np = mesh_flat.cpu().numpy()
-        values_np = values_flat.cpu().numpy()
-        target_np = local_ball_coords.cpu().numpy()
-        
-        result_np = np.zeros((len(points), self.n_channels))
-        for c in range(self.n_channels):
-            result_np[:, c] = griddata(
-                mesh_np, values_np[:, c], target_np, 
-                method='linear', fill_value=0.0
-            )
-        
-        return torch.tensor(result_np, device=self.device, dtype=torch.float32)
+        return values_flat[flat_indices]
     
     @classmethod
     def from_function(cls, func, resolution: int, n_dims: int = 2, n_channels: int = 1,
@@ -173,9 +226,9 @@ class HyperbolicFunctionTensor:
 
 def demo_function(points: torch.Tensor) -> torch.Tensor:
     """Demo function: sin(f1*x) + sin(f2*y)"""
-    f1, f2 = 2.0, 3.0
+    f1, f2 = 1.0, 1.0
     x, y = points[:, 0], points[:, 1]
-    values = torch.sin(f1 * x) + torch.sin(f2 * y)
+    values = torch.tanh(x**2 + y**2) * (torch.sin(f1 * x) + torch.sin(f2 * y))
     return values.unsqueeze(1)
 
 
@@ -215,7 +268,7 @@ def main():
         )
         
         # Render as images
-        image1 = hf.render_2d(resolution=128, extent=3.0)
+        image1 = hf.render_2d(resolution=128, extent=3*scale)
         
         # Show the raw hyperbolic function values (ball coordinates)
         image2 = hf.values[:, :, 0]  # First channel
@@ -247,7 +300,7 @@ def main():
     slider_center_y = Slider(ax_center_y, 'Center Y', -50.0, 50.0, valinit=center_y)
     slider_scale = Slider(ax_scale, 'Scale', 0.1, 200.0, valinit=scale)
     slider_rotation = Slider(ax_rotation, 'Rotation', 0, 2*math.pi, valinit=rotation)
-    slider_resolution = Slider(ax_resolution, 'Resolution', 8, 256, valinit=resolution, valfmt='%d')
+    slider_resolution = Slider(ax_resolution, 'Resolution', 8, 1024, valinit=resolution, valfmt='%d')
     
     def update_params(val):
         nonlocal center_x, center_y, scale, rotation, resolution
