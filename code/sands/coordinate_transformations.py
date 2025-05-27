@@ -2,9 +2,7 @@
 
 import torch
 import numpy as np
-import math
 from typing import Optional, Callable, Tuple
-
 
 
 def create_nd_rotation_matrix(angles, dim):
@@ -59,19 +57,17 @@ def create_nd_rotation_matrix(angles, dim):
     return rot_matrix
 
 
-# Stereographic projection functions (fixed version)
-def stereographic_projection_to_sphere(x_f: torch.Tensor, c: torch.Tensor, r: float):
+def stereographic_projection_to_sphere(x_f: torch.Tensor, r: float):
     """Lift points from flat space to sphere using stereographic projection."""
-    batch_size = x_f.shape[0]
+    ## TODO clean up this func, pprefer to not pass in c at all. always use c=0 for this func
     n = x_f.shape[1]
     
-    c_n = c[:-1]
-    d_squared = torch.sum((x_f - c_n)**2, dim=1, keepdim=True)
+    d_squared = torch.sum(x_f**2, dim=1, keepdim=True)
     scale = (2 * r**2) / (d_squared + r**2)
     
-    x_s_first_n = c_n + scale * (x_f - c_n)
+    x_s_first_n = scale * x_f
     height = r * (d_squared - r**2) / (r**2 + d_squared)
-    x_s_last = c[-1] + height
+    x_s_last = height
     
     x_s = torch.cat([x_s_first_n, x_s_last], dim=1)
     return x_s
@@ -86,10 +82,10 @@ def central_projection_to_flat(x_h: torch.Tensor, c: torch.Tensor):
     return x_f
 
 
-def stereographic_projection_to_flat(x_s: torch.Tensor, c: torch.Tensor, r: float):
+def stereographic_projection_to_flat(x_s: torch.Tensor, r: float):
     """Project points from sphere back to flat space."""
-    north_pole = c.clone()
-    north_pole[-1] = c[-1] + r
+    north_pole = torch.zeros(x_s.shape[1], device=x_s.device)
+    north_pole[-1] = r
     return central_projection_to_flat(x_s, north_pole)
 
 
@@ -103,15 +99,14 @@ def warp_with_rotation(points: torch.Tensor, r: float, rotation_matrix: torch.Te
     n = points.shape[1]
     
     # Step 1: Map to n-sphere using stereographic projection
-    c = torch.zeros(n + 1, device=points.device)
-    sphere_points = stereographic_projection_to_sphere(points, c, 1.0)
+    sphere_points = stereographic_projection_to_sphere(points, 1.0)
     
     # Step 2: Apply rotation
     rotated_points = torch.matmul(sphere_points, rotation_matrix.transpose(0, 1))
     
     # Step 3: Scale and project back to flat space
     rotated_points = rotated_points * r  # Fixed typo from original
-    flat_points = stereographic_projection_to_flat(rotated_points, c, r)
+    flat_points = stereographic_projection_to_flat(rotated_points, .5*r) ## TODO have params r1, r2
     
     return flat_points
 
