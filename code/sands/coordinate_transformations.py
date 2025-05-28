@@ -106,7 +106,7 @@ def warp_with_rotation(points: torch.Tensor, r: float, rotation_matrix: torch.Te
     
     # Step 3: Scale and project back to flat space
     rotated_points = rotated_points * r  # Fixed typo from original
-    flat_points = stereographic_projection_to_flat(rotated_points, .5*r) ## TODO have params r1, r2
+    flat_points = stereographic_projection_to_flat(rotated_points, r)
     
     return flat_points
 
