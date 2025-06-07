@@ -13,21 +13,25 @@ from function_tensor import FunctionTensor, normalize
 # =============================================================================
 
 def demo_function(points: torch.Tensor) -> torch.Tensor:
-    """Demo function: sin(x) + sin(y)"""
+    """ Demo function: sin(pi*x) + sin(pi*y) """
     x, y = points[:, 0], points[:, 1]
     values = torch.sin(torch.pi * x) + torch.sin(torch.pi * y)
     return values.unsqueeze(1)
 
-
-def main():
-    """Interactive demo with stereographic projection controls."""
-    # Device selection
+def get_device():
     if torch.backends.mps.is_available():
         device = 'mps'
     elif torch.cuda.is_available():
         device = 'cuda'
     else:
         device = 'cpu'
+
+    return device
+
+
+def main():
+    """Interactive demo with stereographic projection controls."""
+    device = get_device()
     print(f"Using device: {device}")
 
     params = {
@@ -58,23 +62,30 @@ def main():
         """Update visualization with current parameter values."""
         nonlocal ft
 
-        # Store current zoom levels (only if plots have been initialized)
-        try:
-            ax1_xlim = ax1.get_xlim()
-            ax1_ylim = ax1.get_ylim()
-            ax2_xlim = ax2.get_xlim()
-            ax2_ylim = ax2.get_ylim()
-            # Check if this is the first plot (default matplotlib limits)
-            first_plot = (ax1_xlim == (0.0, 1.0) and ax1_ylim == (0.0, 1.0))
-        except:
-            # First plot - no limits to preserve
-            first_plot = True
+        # # Store current zoom levels (only if plots have been initialized)
+        # try:
+        #     ax1_xlim = ax1.get_xlim()
+        #     ax1_ylim = ax1.get_ylim()
+        #     ax2_xlim = ax2.get_xlim()
+        #     ax2_ylim = ax2.get_ylim()
+        #     # Check if this is the first plot (default matplotlib limits)
+        #     first_plot = (ax1_xlim == (0.0, 1.0) and ax1_ylim == (0.0, 1.0))
+        # except:
+        #     # First plot - no limits to preserve
+        #     first_plot = True
         
         # Create rotation angles list for 3D space (2D input -> 3D sphere)
         rotation_angles = [params['angle_xy'], params['angle_xz'], params['angle_yz']]
         
-        if params['resolution'] != ft.resolution:
-            ft = ft.resample(params['resolution'])
+        # if params['resolution'] != ft.resolution:
+        #     res_ratio = params['resolution'] / ft.resolution
+        #     ft = ft.resample(params['resolution'])
+        #     ax1_xlim = (ax1_xlim[0] * res_ratio, ax1_xlim[1] * res_ratio)
+        #     ax1_ylim = (ax1_ylim[0] * res_ratio, ax1_ylim[1] * res_ratio)
+
+        #     ax2_xlim = (ax2_xlim[0] * res_ratio, ax2_xlim[1] * res_ratio)
+        #     ax2_ylim = (ax2_ylim[0] * res_ratio, ax2_ylim[1] * res_ratio)
+
         
         rotation_matrix = create_nd_rotation_matrix(angles=rotation_angles, dim=3)
         global_coords = FunctionTensor.generate_global_mesh_coords(params['resolution'], n_dims=2)
@@ -109,6 +120,12 @@ def main():
                      f"Rotation YZ: {params['angle_yz']:.2f}")
         ax1.text(0.02, 0.98, param_text, transform=ax1.transAxes, fontsize=8,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # if not first_plot:
+        #     ax1.set_xlim(ax1_xlim)
+        #     ax1.set_ylim(ax1_ylim)
+        #     ax2.set_xlim(ax2_xlim)
+        #     ax2.set_ylim(ax2_ylim)
         
         plt.draw()
 
