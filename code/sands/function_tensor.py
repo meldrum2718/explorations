@@ -141,6 +141,12 @@ class FunctionTensor:
         # 3. Interpolate tensor values
         return self.nd_linear_interpolate(x_wrapped)
 
+    def resample(self, resolution):
+        mesh = FunctionTensor.generate_global_mesh_coords(resolution, self.n_dims)
+        tensor = self(mesh)
+        return FunctionTensor(tensor)
+
+
     @classmethod
     def global_to_local(cls, x_global):
         """Convert from global [-1,1]^n coords to local [0,1]^n coords"""

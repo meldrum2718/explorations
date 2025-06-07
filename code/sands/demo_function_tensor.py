@@ -56,6 +56,8 @@ def main():
     
     def update_plot():
         """Update visualization with current parameter values."""
+        nonlocal ft
+
         # Store current zoom levels (only if plots have been initialized)
         try:
             ax1_xlim = ax1.get_xlim()
@@ -71,14 +73,8 @@ def main():
         # Create rotation angles list for 3D space (2D input -> 3D sphere)
         rotation_angles = [params['angle_xy'], params['angle_xz'], params['angle_yz']]
         
-        # # Create stereographic transformation
-        # pullback_fn, pushforward_fn = create_stereographic_transform(
-        #     radius=params['radius'],
-        #     rotation_angles=rotation_angles,
-        #     n_dims=2,
-        #     device=device
-        # )
-        
+        if params['resolution'] != ft.resolution:
+            ft = ft.resample(params['resolution'])
         
         rotation_matrix = create_nd_rotation_matrix(angles=rotation_angles, dim=3)
         global_coords = FunctionTensor.generate_global_mesh_coords(params['resolution'], n_dims=2)
@@ -115,6 +111,8 @@ def main():
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         
         plt.draw()
+
+        ## update state
         t = params['blend_factor']
         new_state = (1 - t) * normalize(image) + t * normalize(warped_image)
         new_state = normalize(new_state)
