@@ -57,15 +57,9 @@ class FunctionTensor:
         Returns:
             (..., channels) interpolated values
         """
-        print('------ in ndlininterp')
-        print('xl.s', x_local.shape)
-        print('self.ndims', self.n_dims)
         batch_shape = x_local.shape[:-1]  # (...,)
-        print('bs', batch_shape)
         n_points = x_local.numel() // self.n_dims
-        print('np', n_points)
         x_flat = x_local.view(n_points, self.n_dims)
-        print('xf.s', x_flat.shape)
         
         # Apply proper periodic wrapping to ensure we're in [0,1)
         x_wrapped = self.wrap_coordinates(x_flat)
@@ -130,13 +124,10 @@ class FunctionTensor:
             (..., channels) function values
         """
         # 1. Convert global to local coordinates
-        print('xg.s', x_global.shape)
         x_local = FunctionTensor.global_to_local(x_global)
-        print('xl.s', x_local.shape)
         
         # 2. Apply periodic boundary conditions
         x_wrapped = self.wrap_coordinates(x_local)
-        print('xw.s', x_wrapped.shape)
         
         # 3. Interpolate tensor values
         return self.nd_linear_interpolate(x_wrapped)
@@ -160,12 +151,9 @@ class FunctionTensor:
     @classmethod
     def generate_local_mesh_coords(cls, resolution, n_dims):
         """ Generate regular mesh over [0, 1]^n """
-        print('in genlocalmeshcoords')
-        print('resolution', resolution)
         coords_1d = torch.linspace(0, 1, resolution)
         grids = torch.meshgrid([coords_1d] * n_dims, indexing='ij')
         local_coords = torch.stack(grids, dim=-1)
-        print('lc.s', local_coords.shape)
         return local_coords
 
     @classmethod
@@ -185,11 +173,8 @@ class FunctionTensor:
             n_dims: number of spatial dimensions
             channels: number of output channels
         """
-        print('in from_function')
         global_coords = FunctionTensor.generate_global_mesh_coords(resolution, n_dims)
-        print('gc.s', global_coords.shape)
         values_tensor = func(global_coords.reshape(-1, n_dims)).reshape([resolution]*n_dims)
-        print('vt.s', values_tensor.shape)
         if channels == 1:
             values_tensor = values_tensor.unsqueeze(-1)
         return FunctionTensor(values_tensor)
