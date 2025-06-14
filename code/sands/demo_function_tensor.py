@@ -2,6 +2,7 @@ import torch
 from torch.nn import functional as F
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
+from matplotlib.animation import FuncAnimation
 
 from coordinate_transformations import create_stereographic_transform, warp_with_rotation, create_nd_rotation_matrix
 from function_tensor import FunctionTensor, normalize
@@ -54,8 +55,10 @@ def main():
         'angle_xy': 0.0,  # Rotation in xy plane
         'angle_xz': 0.0,  # Rotation in xz plane  
         'angle_yz': 0.0,  # Rotation in yz plane
+        't_x': 0.0,  # Translation
+        't_y': 0.0,  # Translation
         'resolution': 1024,
-        'blend_factor': 0,
+        'blend_factor': 1,
     }
 
     ft = FunctionTensor.from_function(
@@ -71,13 +74,31 @@ def main():
     plt.subplots_adjust(bottom=0.45)
 
     slider_config = [
-        ('radius', 'Radius', 0.01, 10.0),
+        ('radius', 'Radius', 0.001, 10.0),
         ('angle_xy', 'Rotation XY', 0, 1),
         ('angle_xz', 'Rotation XZ', 0, 1),
         ('angle_yz', 'Rotation YZ', 0, 1),
+        ('t_x', 'x translation', -3, 3),
+        ('t_y', 'y translation', -3, 3),
         ('resolution', 'Resolution', 8, 1024),
         ('blend_factor', 'Blend Factor', 0, 1)
     ]
+
+    # if use_lie_alg_like := True:
+    rot_max = 0.1
+    t_max = 0.1
+    slider_config = [
+        ('radius', 'Radius', 0.0010, 2.0),
+        ('angle_xy', 'Rotation XY', -rot_max, rot_max),
+        ('angle_xz', 'Rotation XZ', -rot_max, rot_max),
+        ('angle_yz', 'Rotation YZ', -rot_max, rot_max),
+        ('t_x', 'x translation', -t_max, t_max),
+        ('t_y', 'y translation', -t_max, t_max),
+        ('resolution', 'Resolution', 3, 1024),
+        ('blend_factor', 'Blend Factor', 0, 1)
+    ]
+
+
     
     sliders = setup_sliders(
         fig,
@@ -90,7 +111,7 @@ def main():
         """Update parameters from slider values."""
         for param, slider in sliders.items():
             params[param] = slider.val
-        update_plot()
+        # update_plot()
     
     # Connect sliders
     for slider in sliders.values():
@@ -103,11 +124,12 @@ def main():
     def reset_sliders(event):
         for slider in sliders.values():
             slider.reset()
+        sliders['blend_factor'].val = 1
     
     button_reset.on_clicked(reset_sliders)
 
     
-    def update_plot():
+    def update_plot(frame=None):
         """Update visualization with current parameter values."""
         nonlocal ft
 
@@ -123,6 +145,7 @@ def main():
         
         rotation_matrix = create_nd_rotation_matrix(angles=rotation_angles, dim=3)
         global_coords = FunctionTensor.generate_global_mesh_coords(params['resolution'], n_dims=2)
+        global_coords = global_coords + torch.Tensor([params['t_x'], params['t_y']])
         warped_coords = warp_with_rotation(global_coords.reshape(-1, 2), r=params['radius'], rotation_matrix=rotation_matrix).reshape(global_coords.shape)
 
         image = ft.tensor
@@ -157,8 +180,18 @@ def main():
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
         plt.draw()
+        # return [current_im, warped_im] ## TODO define the images outside of update, do im.set_data. no ax.clear
     
     update_plot()
+    ani = FuncAnimation(
+        fig=fig,
+        func=update_plot,
+        interval=30,
+        cache_frame_data=False,
+        # blit=True,
+        # save_count=1,
+    )
+
     plt.show()
 
 
