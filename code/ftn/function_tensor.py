@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from utils import mod1, normalize
+from utils import mod1, normalize, flatten
 
 
 
@@ -118,6 +118,7 @@ class FunctionTensor:
 
 
     def resample(self, resolution):
+        ## TODO name this better, eg resize
         mesh = FunctionTensor.generate_global_mesh_coords(resolution, self.n_dims)
         tensor = self(mesh)
         return FunctionTensor(tensor)
@@ -125,6 +126,10 @@ class FunctionTensor:
     def blend(self, new_state, blend_factor):
         new_state = (1 - blend_factor) * self.tensor + blend_factor * normalize(new_state)
         self.tensor = normalize(new_state)
+
+
+    def to_flat(self):
+        return flatten(self.tensor)
 
 
     @classmethod
