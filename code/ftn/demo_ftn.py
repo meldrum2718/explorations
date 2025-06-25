@@ -47,7 +47,6 @@ def setup_sliders(fig, config, valinit_params, discrete_sliders=None):
 
 
 def draw_ftn(ftn, axs=None):
-    print('n', ftn.n)
     if axs is None:
         fig, axs = plt.subplots(1, ftn.n)
     if ftn.n > 1:
@@ -61,10 +60,10 @@ def draw_ftn(ftn, axs=None):
     return axs
 
 
-def get_pushforward(radius, rotation_matrix):
+def get_pushforward(radius, rotation_matrix, translation):
     def pushforward(global_coords):
         warped_coords = warp_with_rotation(
-            global_coords.reshape(-1, 2),
+            global_coords.reshape(-1, 2) + translation,
             r=radius,
             rotation_matrix=rotation_matrix
         ).reshape(global_coords.shape)
@@ -85,12 +84,12 @@ def main():
         'angle_yz': 0.0,  # Rotation in yz plane
         't_x': 0.0,  # Translation
         't_y': 0.0,  # Translation
-        'resolution': 128,
+        'resolution': 256,
         'blend_factor': 1,
     }
 
 
-    n_nodes = 5
+    n_nodes = 1
     channels = 1
     resolution = params['resolution']
     fts = [FunctionTensor(torch.rand(resolution, resolution, channels)) for _ in range(n_nodes)]
@@ -156,8 +155,8 @@ def main():
     def update_plot(frame=None):
         """Update visualization with current parameter values."""
 
-        ## if params['resolution'] != ft.resolution:
-        ##     ftn.update_resolution(params['resolution'])
+        if params['resolution'] != ftn.resolution:
+            ftn.update_resolution(params['resolution'])
         
         # Create rotation angles list for 3D space (2D input -> 3D sphere)
         rotation_angles = [
@@ -167,11 +166,10 @@ def main():
         ]
         
         rotation_matrix = create_nd_rotation_matrix(angles=rotation_angles, dim=3)
-        pushforward = get_pushforward(radius=params['radius'], rotation_matrix=rotation_matrix)
+        translation = torch.Tensor([params['t_x'], params['t_y']])
+        pushforward = get_pushforward(radius=params['radius'], rotation_matrix=rotation_matrix, translation=translation)
         pushforwards = [pushforward for _ in range(ftn.n)]
         adj = torch.eye(ftn.n)
-        adj[1, 2] = 1
-        adj[2, 3] = 6
         adj = adj.softmax(dim=1)
         ftn.step(adj=adj, pushforwards=pushforwards, alpha=params['blend_factor'])
 

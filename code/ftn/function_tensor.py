@@ -1,26 +1,8 @@
 import torch
 import torch.nn.functional as F
 
+from utils import mod1, normalize
 
-def normalize(im):
-    """ scale im pixels to [0, 1] """
-    try:
-        im = im.astype('float')
-    except AttributeError:
-        pass
-    try:
-        im = im.to(torch.float32)
-    except AttributeError:
-        pass
-
-    im = im - im.min() # zero min
-    im = im / (im.max() + 1e-9) # unit max
-    return im
-
-
-def mod1(x):
-    """Apply periodic boundary conditions using modulo"""
-    return torch.frac(1.0 + torch.frac(x))
 
 
 class FunctionTensor:
@@ -44,7 +26,6 @@ class FunctionTensor:
         # Validate tensor shape
         assert all(s == self.resolution for s in self.shape[:-1]), \
             "All spatial dimensions must have same resolution"
-    
     
     
     def nd_linear_interpolate(self, x_local):
@@ -136,11 +117,14 @@ class FunctionTensor:
         return self.__call__(x_global)
 
 
-
     def resample(self, resolution):
         mesh = FunctionTensor.generate_global_mesh_coords(resolution, self.n_dims)
         tensor = self(mesh)
         return FunctionTensor(tensor)
+
+    def blend(self, new_state, blend_factor):
+        new_state = (1 - blend_factor) * self.tensor + blend_factor * normalize(new_state)
+        self.tensor = normalize(new_state)
 
 
     @classmethod

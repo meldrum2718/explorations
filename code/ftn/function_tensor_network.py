@@ -2,57 +2,10 @@ import torch
 import torch.nn.functional as F
 import networkx as nx
 
-from function_tensor import FunctionTensor, normalize
+from function_tensor import FunctionTensor
 from typing import List
 
-
-
-def interlaced_perm(d):
-    """
-    Creates an interlaced permutation as a tuple of length d.
-    
-    For even d:
-      - Even positions (0,2,4,...) get filled with (0,1,2,...,d//2-1)
-      - Odd positions (1,3,5,...) get filled with (d//2,d//2+1,...,d-1)
-    
-    For odd d:
-      - Even positions (0,2,4,...) get filled with (d//2,d//2+1,...,d-1)
-      - Odd positions (1,3,5,...) get filled with (0,1,2,...,d//2-1)
-    
-    Args:
-        d: Integer length of permutation
-        
-    Returns:
-        tuple: Interlaced permutation indices
-    """
-    offset = d % 2  # 1 if odd, 0 if even
-    first_half = list(range(d//2))
-    second_half = list(range(d//2, d))
-    indices = [0] * d
-    
-    # Positions determined by offset
-    for i in range(offset, d, 2):
-        indices[i] = first_half[i//2 - offset//2]
-    
-    for i in range(1-offset, d, 2):
-        indices[i] = second_half[(i-(1-offset))//2]
-        
-    return tuple(indices)
-
-
-def flatten(X: torch.Tensor):
-    k = X.dim()
-    perm = interlaced_perm(k)
-    X = X.permute(perm)
-    permuted_shape = torch.tensor(X.shape).to(int)
-    new_shape = [
-        torch.prod(permuted_shape[:(k//2)]).item(),
-        torch.prod(permuted_shape[(k//2):]).item()
-    ]
-
-    X = X.reshape(new_shape)
-    return X
-
+from utils import normalize, flatten
 
 
 class FunctionTensorNetwork:
@@ -69,6 +22,7 @@ class FunctionTensorNetwork:
 
         self.fts = fts
         self.n = len(fts)
+        self.resolution = self.fts[0].shape[0]
         
 
     def step(self, adj, pushforwards, alpha):
@@ -78,9 +32,13 @@ class FunctionTensorNetwork:
             warped.append(ft.sample(pushforward(mesh)))
         outp  = torch.stack(warped, dim=0) # output from each ft
         inp = (adj @ outp.reshape(self.n, -1)).reshape(outp.shape)
-        tensors = (1 - alpha) * self._get_tensors() + alpha * inp
+        tensors = (1 - alpha) * self._get_tensors() + alpha * normalize(inp)
 
         self._set_tensors(normalize(tensors))
+
+    def add_noise(self, epsilon):
+        for ft in self.fts:
+            ft.tensor = normalize(ft.tensor + epsilon * torch.randn(ft.tensor.shape))
 
     def _get_tensors(self):
         return torch.stack([ft.tensor for ft in self.fts], dim=0)
@@ -111,10 +69,11 @@ class FunctionTensorNetwork:
         # 3. Interpolate tensor values
         return self.nd_linear_interpolate(x_wrapped)
 
-    def resample(self, resolution):
-        mesh = FunctionTensor.generate_global_mesh_coords(resolution, self.n_dims)
-        tensor = self(mesh)
-        return FunctionTensor(tensor)
+
+    def update_resolution(self, resolution):
+        for i in range(self.n):
+            self.fts[i] = self.fts[i].resample(resolution)
+        self.resolution = resolution
 
 
     @classmethod
